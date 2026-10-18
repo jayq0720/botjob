@@ -6,6 +6,8 @@ import path from "node:path";
 export type StateStore = {
   get(key: string): Promise<unknown>;
   put(key: string, value: unknown): Promise<void>;
+  /** Read-modify-write of one key. Concurrent calls on the same store do not interleave. */
+  update<T>(key: string, mutate: (current: unknown) => { value: unknown; result: T }): Promise<T>;
   readText(relPath: string): Promise<string | undefined>;
   writeBytes(relPath: string, data: string | Uint8Array): Promise<void>;
 };
@@ -96,18 +98,31 @@ function createFileStore(dataDir: string): StateStore {
     return {};
   }
 
+  async function writeKv(kv: Record<string, unknown>): Promise<void> {
+    await mkdir(dataDir, { recursive: true });
+    const tmp = `${kvPath}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(kv), "utf8");
+    await rename(tmp, kvPath);
+  }
+
   return {
     get(key) {
       return lock(async () => (await readKv())[key]);
     },
     put(key, value) {
       return lock(async () => {
-        await mkdir(dataDir, { recursive: true });
         const kv = await readKv();
         kv[key] = value;
-        const tmp = `${kvPath}.${process.pid}.tmp`;
-        await writeFile(tmp, JSON.stringify(kv), "utf8");
-        await rename(tmp, kvPath);
+        await writeKv(kv);
+      });
+    },
+    update(key, mutate) {
+      return lock(async () => {
+        const kv = await readKv();
+        const { value, result } = mutate(kv[key]);
+        kv[key] = value;
+        await writeKv(kv);
+        return result;
       });
     },
     async readText(relPath) {

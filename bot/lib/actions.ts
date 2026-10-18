@@ -12,6 +12,7 @@ import { parseDetailHtml } from "./boards/parse.js";
 import {
   allowedJobUrl,
   boardFromUrl,
+  canonicalJobUrl,
   jobUrlAllowed,
   listingFromPosting,
   parsePastedJd,
@@ -687,7 +688,7 @@ export async function saveCoverLetter(
     rejectedApproved,
     message:
       rejectedApproved.length > 0
-        ? "已批准或已投递的申请不会改话术。请重新 queue_apply，批准后再导出。"
+        ? "已批准或已投递的申请不会改话术。再次 queue_apply 也只返回原记录，不会改回 queued。"
         : undefined,
     attachedTo: updated
       .filter(
@@ -715,6 +716,14 @@ export type QueueJobInput = {
   matchScore: number;
 };
 
+function samePosting(url: string, other: string): boolean {
+  try {
+    return canonicalJobUrl(url) === canonicalJobUrl(other);
+  } catch {
+    return false;
+  }
+}
+
 export async function queueApply(
   ctx: ActionContext,
   input: { jobs: QueueJobInput[]; coverNote?: string },
@@ -727,9 +736,6 @@ export async function queueApply(
     }
   }
   const now = new Date().toISOString();
-  const existing =
-    ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
-    [];
   const scored =
     ((await ctx.store.get(scoredJobsKey(ctx.sessionId))) as JobListing[] | undefined) ?? [];
   const letters =
@@ -739,38 +745,52 @@ export async function queueApply(
     | ResumeProfile
     | undefined;
 
-  const records: ApplicationRecord[] = input.jobs.map((job, index) => {
-    const prev = scored.find((item) => item.id === job.id || item.url === job.url);
-    const merged: JobListing = {
-      ...prev,
-      ...job,
-      description: job.description ?? prev?.description,
-      experience: job.experience ?? prev?.experience,
-      education: job.education ?? prev?.education,
-      salary: job.salary ?? prev?.salary,
-      score: prev?.score,
-    };
-    if (profile) {
-      const breakdown = scoreAgainstProfile(profile, merged);
-      merged.score = breakdown;
-      merged.matchScore = breakdown.total;
-      merged.matchReason = breakdown.summary;
+  const planned = await ctx.store.update(applicationsKey(ctx.sessionId), (current) => {
+    const existing = Array.isArray(current) ? (current as ApplicationRecord[]) : [];
+    const next = [...existing];
+    const rows: { record: ApplicationRecord; reused: boolean }[] = [];
+    let created = 0;
+    for (const [index, job] of input.jobs.entries()) {
+      const found = next.find((item) => samePosting(item.job.url, job.url));
+      if (found) {
+        rows.push({ record: found, reused: true });
+        continue;
+      }
+      const prev = scored.find((item) => item.id === job.id || samePosting(item.url, job.url));
+      const merged: JobListing = {
+        ...prev,
+        ...job,
+        description: job.description ?? prev?.description,
+        experience: job.experience ?? prev?.experience,
+        education: job.education ?? prev?.education,
+        salary: job.salary ?? prev?.salary,
+        score: prev?.score,
+      };
+      if (profile) {
+        const breakdown = scoreAgainstProfile(profile, merged);
+        merged.score = breakdown;
+        merged.matchScore = breakdown.total;
+        merged.matchReason = breakdown.summary;
+      }
+      const letter = letterFor(letters, merged.id);
+      const record: ApplicationRecord = {
+        id: `app-${job.board}-${job.id}-${Date.now()}-${index}`,
+        job: merged,
+        status: ctx.queueStatus,
+        coverNote: letter?.greeting ?? input.coverNote,
+        greeting: letter?.greeting ?? input.coverNote,
+        coverLetter: letter?.coverLetter,
+        createdAt: now,
+        updatedAt: now,
+      };
+      next.push(record);
+      rows.push({ record, reused: false });
+      created += 1;
     }
-    const letter = letterFor(letters, merged.id);
-    return {
-      id: `app-${job.board}-${job.id}-${Date.now()}-${index}`,
-      job: merged,
-      status: ctx.queueStatus,
-      coverNote: letter?.greeting ?? input.coverNote,
-      greeting: letter?.greeting ?? input.coverNote,
-      coverLetter: letter?.coverLetter,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return { value: next, result: { rows, created } };
   });
 
-  await ctx.store.put(applicationsKey(ctx.sessionId), [...existing, ...records]);
-  const applications = records.map((record) => ({
+  const applications = planned.rows.map(({ record, reused }) => ({
     id: record.id,
     board: record.job.board,
     title: record.job.title,
@@ -781,33 +801,48 @@ export async function queueApply(
     score: record.job.score,
     greeting: record.greeting,
     coverLetter: record.coverLetter,
+    reused,
   }));
+  const reusedNote =
+    planned.created < applications.length
+      ? "同一岗位（规范化 URL）已存在，返回原记录及其当前状态，不新增，也不改话术。"
+      : "";
 
   if (ctx.queueStatus === "approved") {
     return {
       approved: true as const,
-      count: records.length,
+      count: applications.length,
+      created: planned.created,
       applications,
       nextSteps: [
         "调用 export_apply_pack 导出投递包",
         "本机执行 npm run apply:local -- --pack <workspacePath>（持久化浏览器配置 ~/.botjob/browser-profile）",
         "每个岗位由用户确认后投递；跑完用 mark_applied 回写状态",
       ],
-      note: "半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。",
+      note: ["半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。", reusedNote]
+        .filter(Boolean)
+        .join(" "),
     };
   }
 
   return {
     approved: false as const,
-    count: records.length,
+    count: applications.length,
+    created: planned.created,
     applications,
     nextSteps: [
-      "这些申请状态是 queued，还没有批准。",
+      "重复入队不会新增记录，也不会把已批准或已投递的申请改回 queued。请看每条申请自己的 status。",
+      "新排队的申请状态是 queued，还没有批准。",
       "向用户展示岗位、链接、打招呼语和求职信，得到明确同意后再调用 approve_apply。",
       "approve_apply 会用 MCP elicitation 向用户确认。客户端不支持时，先取回 snapshotHash，用户同意后再带 confirm: true 和这个哈希；只传 confirm 不会批准。",
       "只有已批准的岗位才能 export_apply_pack。不要打开浏览器。",
     ],
-    note: "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
+    note: [
+      "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
+      reusedNote,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 

@@ -1,11 +1,20 @@
 {
   "name": "botjob",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Resume analyze, JD scoring, and semi-auto apply for 智联/猎聘/51job/BOSS",
   "bin": {
+    "botjob": "./bin/botjob-mcp.js",
     "botjob-mcp": "./bin/botjob-mcp.js"
   },
+  "files": [
+    "bin/",
+    "bot/",
+    "mcp/",
+    "skills/",
+    "README.md"
+  ],
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
@@ -19,13 +28,13 @@
     "@tesseract.js-data/chi_sim": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "pdf-parse": "^2.4.5",
-    "playwright": "^1.55.0",
     "tesseract.js": "^7.0.0",
+    "tsx": "^4.20.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
-    "tsx": "^4.20.0",
+    "playwright": "^1.55.0",
     "typescript": "6.0.3"
   }
 }

@@ -53,6 +53,13 @@ export function jobUrlAllowed(url: string, board: BoardId): boolean {
   return allowedJobUrl(url) && boardFromUrl(url) === board;
 }
 
+/** Posting identity: URL parser form, fragment removed. */
+export function canonicalJobUrl(url: string): string {
+  const parsed = new URL(url);
+  parsed.hash = "";
+  return parsed.href;
+}
+
 export function listingFromPosting(
   posting: JobPosting,
   profile: ResumeProfile,
