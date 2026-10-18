@@ -1,5 +1,5 @@
 import type { BoardId } from "./types.js";
-import type { JobPosting } from "../jd.js";
+import { jobUrlAllowed, type JobPosting } from "../jd.js";
 
 export type ApiParse =
   | { ok: true; jobs: JobPosting[] }
@@ -106,7 +106,7 @@ function posting(input: {
   url?: string;
   jdStatus?: JobPosting["jdStatus"];
 }): JobPosting | undefined {
-  if (!input.title || !input.url) return undefined;
+  if (!input.title || !input.url || !jobUrlAllowed(input.url, input.board)) return undefined;
   const description = (input.description ?? "").trim();
   return {
     board: input.board,
@@ -427,7 +427,11 @@ function fromJobPostingLd(
     experience: asString(node.experienceRequirements),
     education: asString(node.educationRequirements),
     description: asString(node.description),
-    url: asString(node.url) || pageUrl,
+    url: jobUrlAllowed(asString(node.url) ?? "", board)
+      ? asString(node.url)
+      : jobUrlAllowed(pageUrl, board)
+        ? pageUrl
+        : undefined,
   });
 }
 
@@ -522,7 +526,9 @@ export function parseZhilianApi(payload: unknown): ApiParse {
       experience: exp,
       education: edu,
       description: asString(item.jobSummary),
-      url: asString(item.positionURL) || asString(item.positionUrl),
+      url: [asString(item.positionURL), asString(item.positionUrl)].find((value) =>
+        value ? jobUrlAllowed(value, "zhilian") : false,
+      ),
     });
     return job ? [job] : [];
   });

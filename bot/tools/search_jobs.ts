@@ -110,7 +110,13 @@ export default defineTool({
       selected.map((board) => fetchBoard(board, criteria)),
     );
     const listings = reports.flatMap((report) =>
-      report.listings.map((posting) => listingFromPosting(posting, profile)),
+      report.listings.flatMap((posting) => {
+        try {
+          return [listingFromPosting(posting, profile)];
+        } catch {
+          return [];
+        }
+      }),
     );
     if (listings.length > 0) {
       const existing =

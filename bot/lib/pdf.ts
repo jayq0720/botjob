@@ -1,5 +1,5 @@
 import { PDFParse } from "pdf-parse";
-import { assertOcrText, ocrImage, shutdownOcr } from "./ocr.js";
+import { assertOcrText, ocrImage } from "./ocr.js";
 
 export type PdfExtractResult = {
   text: string;
@@ -102,7 +102,6 @@ export async function extractTextFromPdf(
     };
   } finally {
     await parser.destroy().catch(() => undefined);
-    await shutdownOcr();
   }
 }
 

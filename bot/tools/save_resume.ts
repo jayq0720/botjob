@@ -7,7 +7,6 @@ import {
   decodeImageBase64,
   MAX_IMAGE_BYTES,
   ocrImage,
-  shutdownOcr,
   sniffImage,
 } from "../lib/ocr.js";
 import { decodePdfBase64, extractTextFromPdf, isPdfBytes } from "../lib/pdf.js";
@@ -74,19 +73,15 @@ export default defineTool({
 
     if (imageBase64) {
       const bytes = decodeImageBase64(imageBase64);
-      try {
-        const extracted = assertOcrText(await ocrImage(bytes));
-        const saved = await persistResumeText(ctx, {
-          text: extracted,
-          filename: filename?.trim() || "resume.png",
-          source: source ?? "image",
-          pageCount: 1,
-          ocr: true,
-        });
-        return preview(saved, extracted, true);
-      } finally {
-        await shutdownOcr();
-      }
+      const extracted = assertOcrText(await ocrImage(bytes));
+      const saved = await persistResumeText(ctx, {
+        text: extracted,
+        filename: filename?.trim() || "resume.png",
+        source: source ?? "image",
+        pageCount: 1,
+        ocr: true,
+      });
+      return preview(saved, extracted, true);
     }
 
     if (workspacePath) {
@@ -115,19 +110,15 @@ export default defineTool({
         if (!sniffImage(bytes)) {
           throw new Error("只支持 png / jpg 简历图片");
         }
-        try {
-          const extracted = assertOcrText(await ocrImage(bytes));
-          const saved = await persistResumeText(ctx, {
-            text: extracted,
-            filename: filename?.trim() || path.basename(rel),
-            source: source ?? "image",
-            pageCount: 1,
-            ocr: true,
-          });
-          return preview(saved, extracted, true);
-        } finally {
-          await shutdownOcr();
-        }
+        const extracted = assertOcrText(await ocrImage(bytes));
+        const saved = await persistResumeText(ctx, {
+          text: extracted,
+          filename: filename?.trim() || path.basename(rel),
+          source: source ?? "image",
+          pageCount: 1,
+          ocr: true,
+        });
+        return preview(saved, extracted, true);
       }
       const asText = Buffer.from(bytes).toString("utf8");
       const saved = await persistResumeText(ctx, {

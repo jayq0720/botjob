@@ -41,16 +41,27 @@ export function allowedJobUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
     return boardFromUrl(url) !== undefined;
   } catch {
     return false;
   }
 }
 
+/** https link whose host is the board named in `board`. */
+export function jobUrlAllowed(url: string, board: BoardId): boolean {
+  return allowedJobUrl(url) && boardFromUrl(url) === board;
+}
+
 export function listingFromPosting(
   posting: JobPosting,
   profile: ResumeProfile,
 ): JobListing {
+  if (!jobUrlAllowed(posting.url, posting.board)) {
+    throw new Error(
+      "岗位 URL 必须是该 board 对应站点的 https 链接（智联 zhaopin.com、猎聘 liepin.com、51job.com、BOSS zhipin.com）。",
+    );
+  }
   const score: ScoreBreakdown = scoreJob(profile, posting);
   const key = posting.url || `${posting.title}\n${posting.description}`;
   return {

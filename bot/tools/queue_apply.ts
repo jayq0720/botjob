@@ -1,5 +1,6 @@
 import { defineTool } from "@cursor/bdk/tools";
 import * as z from "zod/v4";
+import { jobUrlAllowed } from "../lib/jd.js";
 import { letterFor } from "../lib/job-state.js";
 import { scoreJob } from "../lib/score.js";
 import {
@@ -13,20 +14,26 @@ import {
   type ResumeProfile,
 } from "../lib/store.js";
 
-const jobSchema = z.object({
-  id: z.string(),
-  board: z.enum(["zhilian", "liepin", "job51", "boss"]),
-  title: z.string(),
-  company: z.string(),
-  city: z.string(),
-  salary: z.string().optional(),
-  experience: z.string().optional(),
-  education: z.string().optional(),
-  description: z.string().optional(),
-  url: z.string().url(),
-  matchReason: z.string(),
-  matchScore: z.number(),
-});
+export const queueJobSchema = z
+  .object({
+    id: z.string(),
+    board: z.enum(["zhilian", "liepin", "job51", "boss"]),
+    title: z.string(),
+    company: z.string(),
+    city: z.string(),
+    salary: z.string().optional(),
+    experience: z.string().optional(),
+    education: z.string().optional(),
+    description: z.string().optional(),
+    url: z.string(),
+    matchReason: z.string(),
+    matchScore: z.number(),
+  })
+  .refine((job) => jobUrlAllowed(job.url, job.board), {
+    message:
+      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com、51job.com、zhipin.com），且域名与 board 一致。",
+    path: ["url"],
+  });
 
 export default defineTool({
   description:
@@ -34,7 +41,7 @@ export default defineTool({
   effect: "write",
   needsApproval: true,
   inputSchema: z.object({
-    jobs: z.array(jobSchema).min(1).max(10),
+    jobs: z.array(queueJobSchema).min(1).max(10),
     coverNote: z
       .string()
       .optional()

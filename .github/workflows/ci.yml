@@ -7,8 +7,6 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    env:
-      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,5 +18,11 @@ jobs:
       - run: npx bdk validate --dir .
       - run: npm test
       - name: evals
-        if: env.CURSOR_API_KEY != ''
-        run: npx bdk eval --dir . --json --no-stream
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "${CURSOR_API_KEY}" ]; then
+            echo "CURSOR_API_KEY is unset; skipping evals"
+            exit 0
+          fi
+          npx bdk eval --dir . --json --no-stream

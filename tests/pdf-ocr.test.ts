@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { after, test } from "node:test";
-import { shutdownOcr } from "../bot/lib/ocr.js";
+import { test } from "node:test";
 import { extractTextFromPdf, MAX_OCR_PAGES, MAX_PDF_BYTES } from "../bot/lib/pdf.js";
-
-after(async () => {
-  await shutdownOcr();
-});
 
 function read(name: string): Uint8Array {
   return new Uint8Array(readFileSync(new URL(`../fixtures/${name}`, import.meta.url)));

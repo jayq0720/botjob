@@ -36,14 +36,29 @@ test("session keys and job/letter upserts", () => {
   });
   assert.equal(upsertLetter(letters, { ...letters[0]!, greeting: "您好，更新" }).length, 1);
 
-  const app: ApplicationRecord = {
+  const queued: ApplicationRecord = {
     id: "app-1",
     job,
-    status: "approved",
+    status: "queued",
     createdAt: "2026-10-18T00:00:00.000Z",
     updatedAt: "2026-10-18T00:00:00.000Z",
   };
-  const next = applyLetter(app ? [app] : [], letters[0]!);
+  const next = applyLetter([queued], letters[0]!);
   assert.equal(next[0]?.greeting, "您好");
   assert.equal(next[0]?.coverNote, "您好");
+
+  const approved: ApplicationRecord = {
+    ...queued,
+    id: "app-approved",
+    status: "approved",
+    greeting: "批准时的原文",
+  };
+  const kept = applyLetter([approved], {
+    ...letters[0]!,
+    jobId: "app-approved",
+    greeting: "偷偷换掉的话术",
+  });
+  assert.equal(kept[0]?.status, "approved");
+  assert.equal(kept[0]?.greeting, "批准时的原文");
+  assert.equal(kept[0]?.coverLetter, undefined);
 });

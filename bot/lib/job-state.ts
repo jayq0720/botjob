@@ -42,6 +42,7 @@ export function applyLetter(
 ): ApplicationRecord[] {
   return apps.map((app) => {
     if (app.id !== letter.jobId && app.job.id !== letter.jobId) return app;
+    if (app.status === "approved" || app.status === "submitted_manual") return app;
     return {
       ...app,
       greeting: letter.greeting,

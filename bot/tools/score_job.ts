@@ -5,9 +5,11 @@ import type { BoardId } from "../lib/boards/types.js";
 import {
   allowedJobUrl,
   boardFromUrl,
+  jobUrlAllowed,
   listingFromPosting,
   parsePastedJd,
 } from "../lib/jd.js";
+import { scoreJob } from "../lib/score.js";
 import { upsertJobs } from "../lib/job-state.js";
 import {
   resumeProfileKey,
@@ -117,6 +119,20 @@ export default defineTool({
       education: input.education,
     });
     if (!parsed.ok) return { ok: false, message: parsed.message };
+    if (!parsed.job.url) {
+      return {
+        ok: true,
+        stored: false,
+        score: scoreJob(profile, parsed.job),
+        message: "已打分。没有岗位链接，未写入可投递记录。",
+      };
+    }
+    if (!jobUrlAllowed(parsed.job.url, parsed.job.board)) {
+      return {
+        ok: false,
+        message: "岗位链接必须是该 board 对应站点的 https 地址。",
+      };
+    }
     const job = listingFromPosting(parsed.job, profile);
     await remember(ctx.host.kv, sessionId, job);
     return {

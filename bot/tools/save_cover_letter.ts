@@ -58,6 +58,14 @@ export default defineTool({
         | ApplicationRecord[]
         | undefined) ?? [];
     const updated = applyLetter(apps, record, now);
+    const rejectedApproved = apps
+      .filter(
+        (app, index) =>
+          updated[index] === app &&
+          (app.id === jobId || app.job.id === jobId) &&
+          (app.status === "approved" || app.status === "submitted_manual"),
+      )
+      .map((app) => app.id);
     if (updated.some((app, index) => app !== apps[index])) {
       await ctx.host.kv.put(applicationsKey(sessionId), updated);
     }
@@ -69,10 +77,19 @@ export default defineTool({
         greetingChars > 150
           ? `打招呼语 ${greetingChars} 字，建议再压到 150 字以内。`
           : undefined,
+      rejectedApproved,
+      message:
+        rejectedApproved.length > 0
+          ? "已批准或已投递的申请不会改话术。请重新 queue_apply，批准后再导出。"
+          : undefined,
       attachedTo: updated
-        .filter((app) => app.job.id === jobId || app.id === jobId)
+        .filter(
+          (app) =>
+            (app.job.id === jobId || app.id === jobId) &&
+            !rejectedApproved.includes(app.id),
+        )
         .map((app) => app.id),
-      next: "queue_apply 批准后 export_apply_pack。本机 apply:local 会显示这段文字；BOSS 发送前必须人工确认。",
+      next: "未批准的岗位可在 queue_apply 里带上这段话术。已批准的记录保持原话术。",
     };
   },
 });

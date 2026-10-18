@@ -1,3 +1,4 @@
+import { jobUrlAllowed } from "./jd.js";
 import type { ApplicationRecord, BoardId } from "./store.js";
 
 export type ApplyPackItem = {
@@ -83,7 +84,25 @@ export function parseApplyPack(raw: string): ApplyPack {
   if (pack.version !== 1 || !Array.isArray(pack.items)) {
     throw new Error("Invalid apply pack: expected version 1 with items[]");
   }
+  for (const item of pack.items) {
+    assertApplyTarget(item, "goto");
+  }
   return pack;
+}
+
+const BOARDS = new Set<BoardId>(["zhilian", "liepin", "job51", "boss"]);
+
+/** Reject any URL the logged-in local browser must not open or type into. */
+export function assertApplyTarget(
+  item: { url?: string; board?: string },
+  when: "goto" | "fill",
+): void {
+  const url = item.url ?? "";
+  const board = item.board ?? "";
+  if (!BOARDS.has(board as BoardId) || !jobUrlAllowed(url, board as BoardId)) {
+    const action = when === "goto" ? "拒绝打开链接" : "拒绝在该页面填入打招呼语";
+    throw new Error(`${action}：${url || "(empty)"}（board=${board || "?"}）`);
+  }
 }
 
 /** Best-effort selectors for “申请/投递” buttons — never click without user confirm. */

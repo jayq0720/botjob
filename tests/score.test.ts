@@ -36,7 +36,10 @@ test("years, education, and salary parsers", () => {
   assert.equal(parseEducation("统招本科")?.label, "本科");
   assert.equal(parseEducation("学历不限")?.unlimited, true);
   assert.deepEqual(parseSalary("20-30k·14薪"), { minK: 20, maxK: 30 });
+  assert.deepEqual(parseSalary("15k-25k"), { minK: 15, maxK: 25 });
   assert.equal(parseSalary("面议")?.negotiable, true);
+  assert.equal(parseYears("公司成立10年"), undefined);
+  assert.deepEqual(parseYears("公司成立10年，要求3年以上"), { min: 3 });
 });
 
 test("frontend JD scores higher than an unrelated sales JD", () => {
@@ -62,4 +65,19 @@ test("frontend JD scores higher than an unrelated sales JD", () => {
   assert.equal(frontend.city.score, 15);
   assert.match(sales.salary.note, /高于/);
   assert.equal(frontend.total, frontend.skills.score + frontend.years.score + frontend.education.score + frontend.city.score + frontend.salary.score);
+  const withTests = scoreJob(profile, {
+    title: "前端工程师",
+    city: "上海",
+    salary: "25-40K",
+    experience: "3-5年",
+    education: "本科",
+    description: "负责业务开发，并编写单元测试。要求 React。",
+  });
+  assert.equal(withTests.skills.missing.includes("测试"), false);
+  const founded = scoreJob(profile, {
+    title: "前端工程师",
+    city: "上海",
+    description: "公司成立10年。负责 React 开发。",
+  });
+  assert.equal(founded.years.note, "未写年限要求");
 });

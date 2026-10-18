@@ -10,8 +10,6 @@ export const MIN_OCR_CHARS = 20;
 const require = createRequire(import.meta.url);
 const LANGS = ["chi_sim", "eng"] as const;
 
-let workerPromise: Promise<Worker> | undefined;
-
 export function collapseCjkSpaces(text: string): string {
   let current = text;
   let next = current.replace(/([\u4e00-\u9fff])[ \t]+(?=[\u4e00-\u9fff])/g, "$1");
@@ -52,30 +50,14 @@ async function ensureLangDir(): Promise<string> {
   return dir;
 }
 
-async function getWorker(): Promise<Worker> {
-  if (!workerPromise) {
-    workerPromise = (async () => {
-      const langPath = await ensureLangDir();
-      return createWorker("chi_sim+eng", 1, {
-        langPath,
-        cachePath: langPath,
-        gzip: true,
-        cacheMethod: "none",
-      });
-    })().catch((err: unknown) => {
-      workerPromise = undefined;
-      throw err;
-    });
-  }
-  return workerPromise;
-}
-
-export async function shutdownOcr(): Promise<void> {
-  const pending = workerPromise;
-  workerPromise = undefined;
-  if (!pending) return;
-  const worker = await pending.catch(() => undefined);
-  await worker?.terminate();
+async function openWorker(): Promise<Worker> {
+  const langPath = await ensureLangDir();
+  return createWorker("chi_sim+eng", 1, {
+    langPath,
+    cachePath: langPath,
+    gzip: true,
+    cacheMethod: "none",
+  });
 }
 
 export function sniffImage(bytes: Uint8Array): "png" | "jpeg" | undefined {
@@ -113,14 +95,15 @@ export async function ocrImage(bytes: Uint8Array): Promise<string> {
   if (!sniffImage(bytes)) {
     throw new Error("OCR 只接受 png / jpg");
   }
-  const worker = await getWorker();
+  const worker = await openWorker();
   try {
     const result = await worker.recognize(Buffer.from(bytes));
     return normalizeOcr(result.data.text ?? "");
   } catch (err) {
-    workerPromise = undefined;
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`OCR 失败：${message}`);
+  } finally {
+    await worker.terminate().catch(() => undefined);
   }
 }
 

@@ -83,7 +83,6 @@ const LEXICON = [
   "后端",
   "全栈",
   "算法",
-  "测试",
   "产品",
   "运营",
   "销售",
@@ -135,16 +134,17 @@ export function textMentionsSkill(text: string, skill: string): boolean {
 
 export function parseYears(text: string | undefined): YearReq | undefined {
   if (!text) return undefined;
-  if (/经验不限|不限经验|年限不限|应届|在校/.test(text)) return { unlimited: true };
-  const range = text.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年/);
+  const cleaned = text.replace(/(?:成立|创办|创立|注册)\s*\d+\s*年/g, " ");
+  if (/经验不限|不限经验|年限不限|应届|在校/.test(cleaned)) return { unlimited: true };
+  const range = cleaned.match(/(\d+)\s*[-~到至]\s*(\d+)\s*年/);
   if (range) return { min: Number(range[1]), max: Number(range[2]) };
-  const plus = text.match(/(\d+)\s*年(?:以上|及以上|\+)/);
+  const plus = cleaned.match(/(\d+)\s*年(?:以上|及以上|\+)/);
   if (plus) return { min: Number(plus[1]) };
-  const under = text.match(/(\d+)\s*年(?:以内|以下)/);
+  const under = cleaned.match(/(\d+)\s*年(?:以内|以下)/);
   if (under) return { max: Number(under[1]) };
-  const cn = text.match(/([一二两三四五六七八九十])\s*年(?:以上|及以上)/);
+  const cn = cleaned.match(/([一二两三四五六七八九十])\s*年(?:以上|及以上)/);
   if (cn) return { min: CN_NUM[cn[1]] };
-  const plain = text.match(/(\d+)\s*年/);
+  const plain = cleaned.match(/(\d+)\s*年/);
   if (plain) return { min: Number(plain[1]), max: Number(plain[1]) };
   return undefined;
 }
@@ -174,6 +174,10 @@ export function parseSalary(
 ): { minK: number; maxK: number; negotiable?: boolean } | undefined {
   if (!text) return undefined;
   if (/面议/.test(text)) return { minK: 0, maxK: 0, negotiable: true };
+  const kBoth = text.match(
+    /(\d+(?:\.\d+)?)\s*[kK]\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[kK]/,
+  );
+  if (kBoth) return { minK: Number(kBoth[1]), maxK: Number(kBoth[2]) };
   const k = text.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[kK]/);
   if (k) return { minK: Number(k[1]), maxK: Number(k[2]) };
   const wan = text.match(
