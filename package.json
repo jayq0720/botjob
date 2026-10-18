@@ -5,15 +5,18 @@
   "description": "Resume analyze + job search/apply assistant for 智联/猎聘/51job",
   "scripts": {
     "check": "tsc --noEmit",
-    "dev": "bdk dev"
+    "dev": "bdk dev",
+    "apply:local": "tsx scripts/local-apply.ts"
   },
   "dependencies": {
     "@cursor/bdk": "^0.2.27",
     "pdf-parse": "^2.4.5",
+    "playwright": "^1.55.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "tsx": "^4.20.0",
     "typescript": "6.0.3"
   }
 }

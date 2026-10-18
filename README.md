@@ -9,16 +9,29 @@
 | 1. 上传简历 | 粘贴全文、workspace 文件路径，或 PDF（`pdfBase64` / `.pdf` 路径）；`save_resume` 解析并写入会话存储 |
 | 2. 分析简历 | Agent 提炼目标岗位 / 技能 / 城市 / 关键词，`save_resume_profile` 落库 |
 | 3. 搜岗 | `search_jobs` 生成三站公开搜索深链 + 匹配候选（示例列表用于演示） |
-| 4. 投递 | `queue_apply` **需用户批准**；批准后给出投递链接，由用户登录站点完成提交 |
+| 4. 投递 | `queue_apply` **需用户批准** → `export_apply_pack` → 本机 `npm run apply:local` 半自动打开浏览器，逐岗确认 |
+| 5. 回写 | 本地 runner 写出 `.results.json` 后，`mark_applied` 更新会话状态 |
 
-## 为什么投递需要人工确认
+## 为什么是「本机半自动」而不是云端代投
 
 智联 / 猎聘 / 51job 没有对第三方开放的稳定公开投递 API，且登录、验证码与平台条款不允许无人值守代投。本项目采用：
 
-- **可自动**：简历解析、画像、关键词、三站搜索链接、匹配说明、投递队列
-- **需用户确认**：真正在浏览器里登录并点击投递（`queue_apply` 走 BDK 审批）
+- **可自动**：简历解析、画像、关键词、三站搜索链接、匹配说明、投递队列、导出 pack
+- **本机半自动**：Playwright 使用你自己的浏览器配置目录（默认 `~/.botjob/browser-profile`），每个岗位必须你按键确认
+- **禁止**：云端静默登录、绕过验证码、无人值守批量代投
 
-后续若接入官方开放平台或用户本机浏览器会话（用户明确授权），可在不改变工具契约的前提下扩展 `queue_apply` 执行层。
+### 本机半自动投递
+
+```bash
+npm install
+npx playwright install chromium
+# 先在 playground 走完 queue_apply → export_apply_pack，或用示例 pack：
+npm run apply:local -- --pack fixtures/sample-apply-pack.json --dry-run
+npm run apply:local -- --pack fixtures/sample-apply-pack.json
+```
+
+按键：`a` 已投递 · `c` 尝试点申请按钮（仍需再确认）· `s` 跳过 · `q` 退出。  
+结果写入同目录 `*.results.json`，再让 agent 调用 `mark_applied`。
 
 ## 本地运行
 
@@ -44,7 +57,7 @@ Playground 对话示例：
 ## 工具一览
 
 - `save_resume` / `get_resume` / `save_resume_profile`
-- `search_jobs` / `queue_apply`（需审批）/ `list_applications`
+- `search_jobs` / `queue_apply`（需审批）/ `export_apply_pack` / `mark_applied` / `list_applications`
 
 ## 项目结构
 
@@ -53,6 +66,9 @@ bot/
   instructions.md
   tools/           # 上述工具
   lib/boards/      # 三站搜索 URL 适配器
+  lib/apply-pack.ts
   skills/job-hunt/
+scripts/local-apply.ts   # 本机半自动投递
+fixtures/
 evals/
 ```

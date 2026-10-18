@@ -67,11 +67,11 @@ export default defineTool({
         status: r.status,
       })),
       nextSteps: [
-        "请用户登录对应招聘网站账号",
-        "打开 applyUrl，确认 JD 后完成投递",
-        "投递完成后可再次对话，把状态更新为已投递（后续可扩展 mark_applied 工具）",
+        "调用 export_apply_pack 导出投递包",
+        "本机执行 npm run apply:local -- --pack <workspacePath>（持久化浏览器配置 ~/.botjob/browser-profile）",
+        "每个岗位由用户确认后投递；跑完用 mark_applied 回写状态",
       ],
-      note: "未自动登录三方站点，避免绕过验证码/违反平台条款。投递动作需用户确认后在浏览器完成。",
+      note: "半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。",
     };
   },
 });

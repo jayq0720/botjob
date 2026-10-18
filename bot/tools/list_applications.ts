@@ -26,6 +26,7 @@ export default defineTool({
         city: a.job.city,
         url: a.job.url,
         coverNote: a.coverNote,
+        lastNote: a.lastNote,
         updatedAt: a.updatedAt,
       })),
     };

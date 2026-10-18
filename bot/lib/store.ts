@@ -40,10 +40,17 @@ export type JobListing = {
 export type ApplicationRecord = {
   id: string;
   job: JobListing;
-  status: "queued" | "approved" | "denied" | "submitted_manual";
+  status:
+    | "queued"
+    | "approved"
+    | "denied"
+    | "submitted_manual"
+    | "skipped"
+    | "failed";
   coverNote?: string;
   createdAt: string;
   updatedAt: string;
+  lastNote?: string;
 };
 
 export function resumeTextPath(sessionId: string): string {

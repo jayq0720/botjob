@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "exportedAt": "2026-10-18T00:00:00.000Z",
+  "sessionId": "sample-session",
+  "items": [
+    {
+      "id": "app-zhilian-demo-1",
+      "board": "zhilian",
+      "title": "高级前端工程师（示例匹配）",
+      "company": "智联招聘示例公司 1",
+      "city": "上海",
+      "url": "https://sou.zhaopin.com/?kw=%E9%AB%98%E7%BA%A7%E5%89%8D%E7%AB%AF%E5%B7%A5%E7%A8%8B%E5%B8%88&jl=%E4%B8%8A%E6%B5%B7",
+      "coverNote": "6年 React/TypeScript，可快速上手业务。",
+      "status": "approved"
+    },
+    {
+      "id": "app-liepin-demo-2",
+      "board": "liepin",
+      "title": "高级前端工程师（示例匹配）",
+      "company": "猎聘示例公司 2",
+      "city": "上海",
+      "url": "https://www.liepin.com/zhaopin/?key=%E9%AB%98%E7%BA%A7%E5%89%8D%E7%AB%AF%E5%B7%A5%E7%A8%8B%E5%B8%88&city=%E4%B8%8A%E6%B5%B7",
+      "status": "approved"
+    },
+    {
+      "id": "app-job51-demo-3",
+      "board": "job51",
+      "title": "高级前端工程师（示例匹配）",
+      "company": "前程无忧(51job)示例公司 3",
+      "city": "上海",
+      "url": "https://we.51job.com/pc/search?keyword=%E9%AB%98%E7%BA%A7%E5%89%8D%E7%AB%AF%E5%B7%A5%E7%A8%8B%E5%B8%88&jobArea=%E4%B8%8A%E6%B5%B7",
+      "status": "approved"
+    }
+  ]
+}
