@@ -7,6 +7,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,7 +20,5 @@ jobs:
       - run: npx bdk validate --dir .
       - run: npm test
       - name: evals
-        if: ${{ secrets.CURSOR_API_KEY != '' }}
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        if: env.CURSOR_API_KEY != ''
         run: npx bdk eval --dir . --json --no-stream
