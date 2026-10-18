@@ -115,6 +115,12 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     assert.equal(byName.get("list_applications")?.annotations?.readOnlyHint, true);
     assert.equal(byName.get("save_resume")?.annotations?.destructiveHint, true);
     assert.equal(byName.get("approve_apply")?.annotations?.readOnlyHint, false);
+    assert.equal(byName.get("search_jobs")?.annotations?.openWorldHint, true);
+    assert.equal(byName.get("search_jobs")?.annotations?.readOnlyHint, false);
+    assert.equal(byName.get("score_job")?.annotations?.openWorldHint, true);
+    assert.equal(byName.get("score_job")?.annotations?.readOnlyHint, false);
+    assert.match(byName.get("score_job")?.description ?? "", /不访问网络/);
+    assert.equal(byName.get("queue_apply")?.annotations?.idempotentHint, true);
     assert.match(byName.get("approve_apply")?.description ?? "", /elicitation/);
     assert.match(byName.get("save_resume")?.description ?? "", /OCR/);
 
@@ -408,6 +414,53 @@ test("approve_apply rejects content changed while the dialog is open", { timeout
   } finally {
     await session.close();
     await other.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("approve_apply elicitation includes a cover letter longer than 500 characters", { timeout: 30_000 }, async () => {
+  const longLetter = `我应聘这个前端岗位，想说明和职责的对应关系。${"匹配证据来自简历里的 React 与 TypeScript。".repeat(20)}`;
+  assert.ok(longLetter.length > 500);
+  const home = await mkdtemp(path.join(tmpdir(), "botjob-mcp-letter-"));
+  const session = await connect(home, async (message) => {
+    assert.ok(message.includes(greeting));
+    assert.ok(message.includes(longLetter));
+    assert.equal(message.includes(`${longLetter.slice(0, 180)}…`), false);
+    return { action: "decline" };
+  });
+  try {
+    const jobId = "zhilian-long-letter";
+    jsonResult(
+      await session.client.callTool({
+        name: "save_cover_letter",
+        arguments: { jobId, greeting, coverLetter: longLetter },
+      }),
+    );
+    jsonResult(
+      await session.client.callTool({
+        name: "queue_apply",
+        arguments: {
+          jobs: [
+            {
+              id: jobId,
+              board: "zhilian",
+              title: "高级前端工程师",
+              company: "星河科技",
+              city: "上海",
+              url: jobUrl,
+              matchReason: "长求职信",
+              matchScore: 80,
+            },
+          ],
+        },
+      }),
+    );
+    const decision = jsonResult(
+      await session.client.callTool({ name: "approve_apply", arguments: {} }),
+    );
+    assert.equal(decision.approved, false);
+  } finally {
+    await session.close();
     await rm(home, { recursive: true, force: true });
   }
 });

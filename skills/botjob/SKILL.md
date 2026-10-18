@@ -23,6 +23,24 @@ description: >
 
 状态在 `~/.botjob/data/`，可用 `BOTJOB_HOME` 改家目录。用 `get_resume` 和 `list_applications` 回答进度。
 
+## 接入
+
+客户端不克隆仓库时用一行 npx（stdio），版本固定为 tag `v0.1.0`（与 `package.json` 的 `version` 一致）。不要把 `npm run mcp` 配进去。
+
+这个 tag 要在合并到 main 之后由维护者自己打。打 tag 之前，把下面命令里的 `#v0.1.0` 换成 `#<commit sha>`。
+
+```bash
+npx -y github:qianjie0720-sys/botjob#v0.1.0
+```
+
+Claude Code：`claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0`
+
+Codex：`codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0`
+
+Cursor / Claude Desktop 的 `mcpServers.botjob`：`command` 为 `npx`，`args` 为 `["-y", "github:qianjie0720-sys/botjob#v0.1.0"]`。Cursor 还要 `"type": "stdio"`。
+
+已经克隆仓库时，改为 `node` 加上仓库里的 `bin/botjob-mcp.js`。
+
 ## 链接
 
 只接受智联 `zhaopin.com`、猎聘 `liepin.com`、前程无忧 `51job.com`、BOSS `zhipin.com` 的 https 链接，而且域名必须和 `board` 一致。其它链接请用户贴 JD 正文。
@@ -42,7 +60,7 @@ description: >
 - 不编造简历里没有的公司、年限或项目。
 - 大约 200–500 字。
 
-已批准或已投递的申请不能靠 `save_cover_letter` 改话术。要改就重新排队，再请用户批准。
+已批准或已投递的申请不能靠 `save_cover_letter` 改话术。`queued`、`approved`、`submitted_manual` 再次 `queue_apply` 只返回原记录，不会改回 queued，也不会改掉已批准的话术。`failed` 或 `skipped` 会另开一条 `queued`，使用最新话术，并需要重新审批；旧记录保留。
 
 ## 本机投递
 

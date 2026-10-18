@@ -86,7 +86,15 @@ Playground 对话示例：
 
 stdio MCP 服务器把上面的工具暴露给 Claude Code、Codex CLI、Cursor、Claude Desktop，以及任何支持本地 stdio MCP 的客户端。只做本机进程，没有远程 HTTP。打招呼语和求职信仍由客户端里的模型来写，服务器只保存。
 
-先在仓库里安装依赖。客户端要启动的是 `node bin/botjob-mcp.js`（或在本仓库里 `npx botjob-mcp`）。不要把 `npm run mcp` 配进客户端：npm 会往 stdout 打一行脚本名，stdio 协议会坏。`npm run mcp` 只适合你自己在终端里看它是否卡住等待输入。
+不克隆仓库时，用一行 npx 从 GitHub 启动（这个包是 `private`，不要发到 npm）。版本固定在 tag `v0.1.0`，与 `package.json` 的 `version` 对齐。
+
+这个 tag 需要在本分支合并进 main 之后，由仓库维护者自己打。打 tag 之前，把命令里的 `#v0.1.0` 换成 `#<commit sha>`。本次改动不会创建这个 tag。
+
+```bash
+npx -y github:qianjie0720-sys/botjob#v0.1.0
+```
+
+已经克隆仓库时，仍可 `npm install` 后启动 `node bin/botjob-mcp.js`（或在本仓库里 `npx botjob-mcp`）。不要把 `npm run mcp` 配进客户端：npm 会往 stdout 打一行脚本名，stdio 协议会坏。`npm run mcp` 只适合你自己在终端里看它是否卡住等待输入。
 
 状态在 `~/.botjob/data/`（`kv.json` 和简历文件）。设置 `BOTJOB_HOME` 可以改掉 `~/.botjob` 这一层。浏览器登录态仍是 `~/.botjob/browser-profile`，跟数据目录分开。
 
@@ -100,16 +108,30 @@ MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模
 
 服务器启动时会把 `bot/skills/job-hunt` 的流程和写作规范做成 prompt `job-hunt`，以及 resource `botjob://skills/job-hunt`。给 Claude Code / Codex 用的同一份说明在 `skills/botjob/SKILL.md`。
 
-下面的路径请换成这台机器上的仓库绝对路径。配置格式来自各工具当前文档：Claude Code 的 [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)，Codex 的 [Model Context Protocol](https://learn.chatgpt.com/docs/extend/mcp)，Cursor 的 [MCP](https://cursor.com/docs/mcp)。
+配置格式来自各工具当前文档：Claude Code 的 [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)，Codex 的 [Model Context Protocol](https://learn.chatgpt.com/docs/extend/mcp)，Cursor 的 [MCP](https://cursor.com/docs/mcp)。每段先写 npx 一行，再写克隆仓库后的备选。
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio --scope project botjob -- node /绝对路径/botjob/bin/botjob-mcp.js
+claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
 claude mcp list
 ```
 
-`--` 后面整段是服务器命令，不要漏。项目级配置写在仓库根的 `.mcp.json`（Claude Code 会请你批准后才启动）：
+`--` 后面整段是服务器命令，不要漏。等价 JSON：
+
+```json
+{
+  "mcpServers": {
+    "botjob": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
+    }
+  }
+}
+```
+
+已经克隆仓库时，项目级配置可以改成直接跑本机文件（Claude Code 会请你批准后才启动）：
 
 ```json
 {
@@ -135,11 +157,19 @@ ln -s ../../skills/botjob .claude/skills/botjob
 Codex 把 MCP 配在 `~/.codex/config.toml`（项目级是受信任仓库里的 `.codex/config.toml`）。CLI 和 Codex 桌面端共用这份配置。
 
 ```bash
-codex mcp add botjob -- node /绝对路径/botjob/bin/botjob-mcp.js
+codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
 codex mcp list
 ```
 
 手写时：
+
+```toml
+[mcp_servers.botjob]
+command = "npx"
+args = ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
+```
+
+已经克隆仓库时：
 
 ```toml
 [mcp_servers.botjob]
@@ -166,6 +196,20 @@ ln -s ../../skills/botjob .agents/skills/botjob
   "mcpServers": {
     "botjob": {
       "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
+    }
+  }
+}
+```
+
+已经克隆仓库、并且要用工作区里的代码时：
+
+```json
+{
+  "mcpServers": {
+    "botjob": {
+      "type": "stdio",
       "command": "node",
       "args": ["${workspaceFolder}/bin/botjob-mcp.js"]
     }
@@ -183,12 +227,14 @@ Claude Desktop 的配置文件：macOS 是 `~/Library/Application Support/Claude
 {
   "mcpServers": {
     "botjob": {
-      "command": "node",
-      "args": ["/绝对路径/botjob/bin/botjob-mcp.js"]
+      "command": "npx",
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
     }
   }
 }
 ```
+
+已经克隆仓库时，把 `command` 换成 `node`，`args` 换成 `["/绝对路径/botjob/bin/botjob-mcp.js"]`。
 
 其他只支持 stdio 的客户端用同一组 `command` / `args`。服务器声明的工具说明、`readOnlyHint` / `destructiveHint`，以及 prompt `job-hunt`，会在 `tools/list` 和 `prompts/list` 里出现。
 

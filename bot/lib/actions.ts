@@ -12,6 +12,7 @@ import { parseDetailHtml } from "./boards/parse.js";
 import {
   allowedJobUrl,
   boardFromUrl,
+  canonicalJobUrl,
   jobUrlAllowed,
   listingFromPosting,
   parsePastedJd,
@@ -663,10 +664,13 @@ export async function saveCoverLetter(
     [];
   await ctx.store.put(coverLettersKey(ctx.sessionId), upsertLetter(existing, record));
 
-  const apps =
-    ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
-    [];
-  const updated = applyLetter(apps, record, now);
+  const applied = await ctx.store.update(applicationsKey(ctx.sessionId), (current) => {
+    const apps = Array.isArray(current) ? (current as ApplicationRecord[]) : [];
+    const updated = applyLetter(apps, record, now);
+    const changed = updated.some((app, index) => app !== apps[index]);
+    return { value: changed ? updated : apps, result: { apps, updated } };
+  });
+  const { apps, updated } = applied;
   const rejectedApproved = apps
     .filter(
       (app, index) =>
@@ -675,9 +679,6 @@ export async function saveCoverLetter(
         (app.status === "approved" || app.status === "submitted_manual"),
     )
     .map((app) => app.id);
-  if (updated.some((app, index) => app !== apps[index])) {
-    await ctx.store.put(applicationsKey(ctx.sessionId), updated);
-  }
   return {
     saved: true as const,
     jobId: input.jobId,
@@ -687,7 +688,7 @@ export async function saveCoverLetter(
     rejectedApproved,
     message:
       rejectedApproved.length > 0
-        ? "已批准或已投递的申请不会改话术。请重新 queue_apply，批准后再导出。"
+        ? "已批准或已投递的申请不会改话术。这些状态再次 queue_apply 只返回原记录，不会改回 queued。"
         : undefined,
     attachedTo: updated
       .filter(
@@ -715,6 +716,21 @@ export type QueueJobInput = {
   matchScore: number;
 };
 
+function samePosting(url: string, other: string): boolean {
+  try {
+    return canonicalJobUrl(url) === canonicalJobUrl(other);
+  } catch {
+    return false;
+  }
+}
+
+/** Only an in-flight or already submitted row blocks another queue_apply. */
+const DEDUPE_STATUSES = new Set<ApplicationRecord["status"]>([
+  "queued",
+  "approved",
+  "submitted_manual",
+]);
+
 export async function queueApply(
   ctx: ActionContext,
   input: { jobs: QueueJobInput[]; coverNote?: string },
@@ -727,9 +743,6 @@ export async function queueApply(
     }
   }
   const now = new Date().toISOString();
-  const existing =
-    ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
-    [];
   const scored =
     ((await ctx.store.get(scoredJobsKey(ctx.sessionId))) as JobListing[] | undefined) ?? [];
   const letters =
@@ -739,38 +752,54 @@ export async function queueApply(
     | ResumeProfile
     | undefined;
 
-  const records: ApplicationRecord[] = input.jobs.map((job, index) => {
-    const prev = scored.find((item) => item.id === job.id || item.url === job.url);
-    const merged: JobListing = {
-      ...prev,
-      ...job,
-      description: job.description ?? prev?.description,
-      experience: job.experience ?? prev?.experience,
-      education: job.education ?? prev?.education,
-      salary: job.salary ?? prev?.salary,
-      score: prev?.score,
-    };
-    if (profile) {
-      const breakdown = scoreAgainstProfile(profile, merged);
-      merged.score = breakdown;
-      merged.matchScore = breakdown.total;
-      merged.matchReason = breakdown.summary;
+  const planned = await ctx.store.update(applicationsKey(ctx.sessionId), (current) => {
+    const existing = Array.isArray(current) ? (current as ApplicationRecord[]) : [];
+    const next = [...existing];
+    const rows: { record: ApplicationRecord; reused: boolean }[] = [];
+    let created = 0;
+    for (const [index, job] of input.jobs.entries()) {
+      const found = next.find(
+        (item) => DEDUPE_STATUSES.has(item.status) && samePosting(item.job.url, job.url),
+      );
+      if (found) {
+        rows.push({ record: found, reused: true });
+        continue;
+      }
+      const prev = scored.find((item) => item.id === job.id || samePosting(item.url, job.url));
+      const merged: JobListing = {
+        ...prev,
+        ...job,
+        description: job.description ?? prev?.description,
+        experience: job.experience ?? prev?.experience,
+        education: job.education ?? prev?.education,
+        salary: job.salary ?? prev?.salary,
+        score: prev?.score,
+      };
+      if (profile) {
+        const breakdown = scoreAgainstProfile(profile, merged);
+        merged.score = breakdown;
+        merged.matchScore = breakdown.total;
+        merged.matchReason = breakdown.summary;
+      }
+      const letter = letterFor(letters, merged.id);
+      const record: ApplicationRecord = {
+        id: `app-${job.board}-${job.id}-${Date.now()}-${index}`,
+        job: merged,
+        status: ctx.queueStatus,
+        coverNote: letter?.greeting ?? input.coverNote,
+        greeting: letter?.greeting ?? input.coverNote,
+        coverLetter: letter?.coverLetter,
+        createdAt: now,
+        updatedAt: now,
+      };
+      next.push(record);
+      rows.push({ record, reused: false });
+      created += 1;
     }
-    const letter = letterFor(letters, merged.id);
-    return {
-      id: `app-${job.board}-${job.id}-${Date.now()}-${index}`,
-      job: merged,
-      status: ctx.queueStatus,
-      coverNote: letter?.greeting ?? input.coverNote,
-      greeting: letter?.greeting ?? input.coverNote,
-      coverLetter: letter?.coverLetter,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return { value: next, result: { rows, created } };
   });
 
-  await ctx.store.put(applicationsKey(ctx.sessionId), [...existing, ...records]);
-  const applications = records.map((record) => ({
+  const applications = planned.rows.map(({ record, reused }) => ({
     id: record.id,
     board: record.job.board,
     title: record.job.title,
@@ -781,33 +810,48 @@ export async function queueApply(
     score: record.job.score,
     greeting: record.greeting,
     coverLetter: record.coverLetter,
+    reused,
   }));
+  const reusedNote =
+    planned.created < applications.length
+      ? "queued、approved 或 submitted_manual 的同一岗位返回原记录，不新增，也不改话术。"
+      : "";
 
   if (ctx.queueStatus === "approved") {
     return {
       approved: true as const,
-      count: records.length,
+      count: applications.length,
+      created: planned.created,
       applications,
       nextSteps: [
         "调用 export_apply_pack 导出投递包",
         "本机执行 npm run apply:local -- --pack <workspacePath>（持久化浏览器配置 ~/.botjob/browser-profile）",
         "每个岗位由用户确认后投递；跑完用 mark_applied 回写状态",
       ],
-      note: "半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。",
+      note: ["半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。", reusedNote]
+        .filter(Boolean)
+        .join(" "),
     };
   }
 
   return {
     approved: false as const,
-    count: records.length,
+    count: applications.length,
+    created: planned.created,
     applications,
     nextSteps: [
-      "这些申请状态是 queued，还没有批准。",
+      "queued、approved、submitted_manual 的同一岗位不会重复入队，也不会被改回 queued。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。",
+      "新排队的申请状态是 queued，还没有批准。",
       "向用户展示岗位、链接、打招呼语和求职信，得到明确同意后再调用 approve_apply。",
       "approve_apply 会用 MCP elicitation 向用户确认。客户端不支持时，先取回 snapshotHash，用户同意后再带 confirm: true 和这个哈希；只传 confirm 不会批准。",
       "只有已批准的岗位才能 export_apply_pack。不要打开浏览器。",
     ],
-    note: "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
+    note: [
+      "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
+      reusedNote,
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 
@@ -845,9 +889,6 @@ export async function approveApplications(
   ctx: ActionContext,
   input: { ids: string[]; snapshots: Record<string, string> },
 ) {
-  const apps =
-    ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
-    [];
   const ids = [...new Set(input.ids.map((id) => id.trim()).filter((id) => id.length > 0))];
   if (ids.length === 0) {
     return {
@@ -857,43 +898,52 @@ export async function approveApplications(
       message: "没有要批准的申请。请先 queue_apply。",
     };
   }
-  const mismatched: string[] = [];
-  const queued: ApplicationRecord[] = [];
-  for (const id of ids) {
-    const app = apps.find((item) => item.id === id);
-    if (!app || app.status !== "queued") {
-      mismatched.push(id);
-      continue;
+  type ApproveDecision =
+    | { ok: false; mismatched: string[]; apps: ApplicationRecord[] }
+    | { ok: true; mismatched: string[]; apps: ApplicationRecord[]; approvedIds: Set<string> };
+  const decided = await ctx.store.update<ApproveDecision>(applicationsKey(ctx.sessionId), (current) => {
+    const apps = Array.isArray(current) ? (current as ApplicationRecord[]) : [];
+    const mismatched: string[] = [];
+    const queued: ApplicationRecord[] = [];
+    for (const id of ids) {
+      const app = apps.find((item) => item.id === id);
+      if (!app || app.status !== "queued") {
+        mismatched.push(id);
+        continue;
+      }
+      const hash = applicationSnapshotHash({
+        id: app.id,
+        url: app.job.url,
+        greeting: app.greeting,
+        coverLetter: app.coverLetter,
+      });
+      if (hash !== input.snapshots[id]) mismatched.push(id);
+      else queued.push(app);
     }
-    const hash = applicationSnapshotHash({
-      id: app.id,
-      url: app.job.url,
-      greeting: app.greeting,
-      coverLetter: app.coverLetter,
-    });
-    if (hash !== input.snapshots[id]) mismatched.push(id);
-    else queued.push(app);
-  }
-  if (mismatched.length > 0 || queued.length !== ids.length) {
+    if (mismatched.length > 0 || queued.length !== ids.length) {
+      return { value: apps, result: { ok: false as const, mismatched, apps } };
+    }
+    const now = new Date().toISOString();
+    const approvedIds = new Set(queued.map((app) => app.id));
+    const updated = apps.map((app) =>
+      approvedIds.has(app.id) ? { ...app, status: "approved" as const, updatedAt: now } : app,
+    );
+    return { value: updated, result: { ok: true as const, mismatched, apps: updated, approvedIds } };
+  });
+  if (!decided.ok) {
     return {
       approved: false as const,
       count: 0,
-      mismatched,
+      mismatched: decided.mismatched,
       message: SNAPSHOT_MISMATCH,
     };
   }
-  const now = new Date().toISOString();
-  const approvedIds = new Set(queued.map((app) => app.id));
-  const updated = apps.map((app) =>
-    approvedIds.has(app.id) ? { ...app, status: "approved" as const, updatedAt: now } : app,
-  );
-  await ctx.store.put(applicationsKey(ctx.sessionId), updated);
   return {
     approved: true as const,
-    count: queued.length,
-    mismatched,
-    applications: updated
-      .filter((app) => approvedIds.has(app.id))
+    count: decided.approvedIds.size,
+    mismatched: decided.mismatched,
+    applications: decided.apps
+      .filter((app) => decided.approvedIds.has(app.id))
       .map((app) => ({
         id: app.id,
         status: app.status,
@@ -987,60 +1037,69 @@ export async function markApplied(
   ctx: ActionContext,
   input: { results: { id: string; outcome: "applied" | "skipped" | "failed"; note?: string }[] },
 ) {
-  const apps =
-    ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
-    [];
-  if (apps.length === 0) {
+  const now = new Date().toISOString();
+  const byId = new Map(input.results.map((result) => [result.id, result]));
+  type MarkOutcome =
+    | { kind: "empty" }
+    | { kind: "unchanged"; ignored: string[] }
+    | { kind: "changed"; changed: number; ignored: string[]; updated: ApplicationRecord[] };
+  const outcome = await ctx.store.update<MarkOutcome>(applicationsKey(ctx.sessionId), (current) => {
+    const apps = Array.isArray(current) ? (current as ApplicationRecord[]) : [];
+    if (apps.length === 0) {
+      return { value: apps, result: { kind: "empty" as const } };
+    }
+    let changed = 0;
+    const ignored: string[] = [];
+    const updated = apps.map((app) => {
+      const result = byId.get(app.id);
+      if (!result) return app;
+      if (app.status !== "approved") {
+        ignored.push(app.id);
+        return app;
+      }
+      changed += 1;
+      const status: ApplicationRecord["status"] =
+        result.outcome === "applied"
+          ? "submitted_manual"
+          : result.outcome === "skipped"
+            ? "skipped"
+            : "failed";
+      return {
+        ...app,
+        status,
+        lastNote: result.note,
+        updatedAt: now,
+      };
+    });
+    if (changed === 0) {
+      return { value: apps, result: { kind: "unchanged" as const, ignored } };
+    }
+    return { value: updated, result: { kind: "changed" as const, changed, ignored, updated } };
+  });
+
+  if (outcome.kind === "empty") {
     return {
       updated: false as const,
       message: "No applications in this session to update.",
     };
   }
-
-  const now = new Date().toISOString();
-  const byId = new Map(input.results.map((result) => [result.id, result]));
-  let changed = 0;
-  const ignored: string[] = [];
-  const updated = apps.map((app) => {
-    const result = byId.get(app.id);
-    if (!result) return app;
-    if (app.status !== "approved") {
-      ignored.push(app.id);
-      return app;
-    }
-    changed += 1;
-    const status: ApplicationRecord["status"] =
-      result.outcome === "applied"
-        ? "submitted_manual"
-        : result.outcome === "skipped"
-          ? "skipped"
-          : "failed";
-    return {
-      ...app,
-      status,
-      lastNote: result.note,
-      updatedAt: now,
-    };
-  });
-
-  if (changed === 0) {
+  if (outcome.kind === "unchanged") {
     return {
       updated: false as const,
       changed: 0,
-      ignored,
-      message: ignored.length
+      ignored: outcome.ignored,
+      message: outcome.ignored.length
         ? "只有已批准的申请可以回写。这些记录不是已批准，已忽略。"
         : "没有匹配到已批准的申请。",
     };
   }
 
-  await ctx.store.put(applicationsKey(ctx.sessionId), updated);
   return {
     updated: true as const,
-    changed,
-    ignored,
-    applications: updated
-      .filter((app) => byId.has(app.id) && !ignored.includes(app.id))
+    changed: outcome.changed,
+    ignored: outcome.ignored,
+    applications: outcome.updated
+      .filter((app) => byId.has(app.id) && !outcome.ignored.includes(app.id))
       .map((app) => ({
         id: app.id,
         status: app.status,

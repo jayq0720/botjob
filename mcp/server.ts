@@ -234,7 +234,7 @@ export function createBotjobServer(): McpServer {
     {
       title: "给岗位打分",
       description:
-        "用已保存画像给一个岗位打 0–100 分。可传 JD 文本、岗位 https 链接，或已经拿到的详情 HTML。传 html 时不访问网络。站外链接会被拒绝。不编造页面里没有的字段，不绕过验证码。",
+        "用已保存画像给一个岗位打 0–100 分。可传 JD 文本、岗位 https 链接，或已经拿到的详情 HTML。只传 html（需同时给该站 https 链接）或只传 JD 文本时不访问网络；只给 url、没有 html 时会抓取公开页面。站外链接会被拒绝。不编造页面里没有的字段，不绕过验证码。",
       inputSchema: scoreSchema,
       annotations: {
         readOnlyHint: false,
@@ -272,12 +272,12 @@ export function createBotjobServer(): McpServer {
     {
       title: "加入投递队列",
       description:
-        "把岗位放进投递队列，状态是 queued，还没有批准。只接受智联、猎聘、51job、BOSS 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来必须让用户确认，再调用 approve_apply。",
+        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘、51job、BOSS 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来必须让用户确认，再调用 approve_apply。",
       inputSchema: z.object({
         jobs: z.array(queueJobSchema).min(1).max(10),
         coverNote: z.string().optional().describe("还没单独保存话术时的简短备注"),
       }),
-      annotations: ADD,
+      annotations: { ...ADD, idempotentHint: true },
     },
     async (args) => run(() => queueApply(ctx(), args)),
   );
@@ -338,14 +338,21 @@ export function createBotjobServer(): McpServer {
           ]),
         );
         const snapshotHash = approvalBundleHash(ids, snapshots);
-        const lines = queued.map((app) => {
-          const letter = summarizeLetter(app.coverLetter);
-          return `- ${app.title}｜${app.company}｜${app.board}｜${app.url}\n  打招呼语：${app.greeting ?? "（无）"}\n  求职信：${letter}`;
-        });
+        const lines = queued.map((app, index) =>
+          [
+            `申请 ${index + 1}/${queued.length}`,
+            `${app.title}｜${app.company}｜${app.board}`,
+            app.url,
+            "打招呼语：",
+            app.greeting?.trim() || "（无）",
+            "求职信：",
+            app.coverLetter?.trim() || "（无）",
+          ].join("\n"),
+        );
         const decision = await userConfirmed(
           server,
           extra,
-          `请确认是否批准下面 ${queued.length} 条申请。批准后才能导出投递包，打招呼语和求职信将不能再改。服务器不会打开浏览器。\n\n${lines.join("\n")}`,
+          `请确认是否批准下面 ${queued.length} 条申请。批准后才能导出投递包，打招呼语和求职信将不能再改。服务器不会打开浏览器。\n\n${lines.join("\n\n")}`,
           args.confirm,
           args.snapshotHash,
           snapshotHash,
@@ -479,13 +486,6 @@ async function run<T>(fn: () => Promise<T>) {
   } catch (err) {
     return toolError(err instanceof Error ? err.message : String(err));
   }
-}
-
-function summarizeLetter(letter: string | undefined): string {
-  const text = letter?.trim();
-  if (!text) return "（无）";
-  if (text.length <= 180) return text;
-  return `${text.slice(0, 180)}…`;
 }
 
 async function userConfirmed(

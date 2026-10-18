@@ -35,6 +35,9 @@ const UA =
 
 const MAX_LISTINGS = 5;
 const MAX_DETAILS = 3;
+const MAX_REDIRECTS = 5;
+/** Same cap the old buffered read used, in decimal bytes. */
+const MAX_BODY_BYTES = 2_000_000;
 
 const ZHILIAN_CITY_ID: Record<string, string> = {
   北京: "530",
@@ -111,31 +114,98 @@ type Fetched = {
   contentType: string;
 };
 
-async function fetchText(url: string): Promise<Fetched | { error: string }> {
+const FETCH_HEADERS = {
+  "user-agent": UA,
+  accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+  "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
+
+function isRedirect(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function declaredLength(response: Response): number | undefined {
+  const raw = response.headers.get("content-length")?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+async function cancelBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+async function readLimitedBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      if (total + value.byteLength > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("响应体超过 2MB，已中止读取。");
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => undefined);
+    throw err;
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8").decode(merged);
+}
+
+/** Fetch one allowlisted https URL. Redirects are checked one hop at a time. */
+export async function fetchText(url: string): Promise<Fetched | { error: string }> {
   if (!allowedJobUrl(url)) {
     return { error: "只抓取智联、猎聘、51job、BOSS 的 https 页面。" };
   }
+  let current = url;
   try {
-    const response = await fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(12_000),
-      headers: {
-        "user-agent": UA,
-        accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-      },
-    });
-    if (!allowedJobUrl(response.url)) {
-      return { error: `重定向离开了招聘站：${response.url}` };
+    for (let redirects = 0; ; redirects++) {
+      const response = await fetch(current, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(12_000),
+        headers: FETCH_HEADERS,
+      });
+      if (isRedirect(response.status)) {
+        await cancelBody(response);
+        if (redirects >= MAX_REDIRECTS) return { error: "重定向超过 5 跳。" };
+        const location = response.headers.get("location");
+        if (!location) return { error: "重定向没有 Location。" };
+        let next: string;
+        try {
+          next = new URL(location, current).href;
+        } catch {
+          return { error: "重定向 Location 不是合法 URL。" };
+        }
+        if (!allowedJobUrl(next)) return { error: `重定向离开了招聘站：${next}` };
+        current = next;
+        continue;
+      }
+      const length = declaredLength(response);
+      if (length !== undefined && length > MAX_BODY_BYTES) {
+        await cancelBody(response);
+        return { error: `响应体超过 2MB（Content-Length: ${length}）。` };
+      }
+      const body = await readLimitedBody(response);
+      return {
+        status: response.status,
+        finalUrl: current,
+        body,
+        contentType: response.headers.get("content-type") ?? "",
+      };
     }
-    const bytes = await response.arrayBuffer();
-    const body = new TextDecoder("utf-8").decode(bytes.slice(0, 2_000_000));
-    return {
-      status: response.status,
-      finalUrl: response.url,
-      body,
-      contentType: response.headers.get("content-type") ?? "",
-    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { error: message };
