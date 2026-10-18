@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "data": {
+    "results": [
+      {
+        "jobName": "高级前端工程师",
+        "companyName": "星河科技",
+        "salary": "25-40K",
+        "city": { "display": "上海" },
+        "workingExp": { "name": "3-5年" },
+        "eduLevel": { "name": "本科" },
+        "positionURL": "https://www.zhaopin.com/jobdetail/CC001.htm",
+        "jobSummary": "熟悉 React、TypeScript、Node.js，有性能优化经验，工作城市上海。"
+      }
+    ]
+  }
+}
