@@ -86,10 +86,12 @@ Playground 对话示例：
 
 stdio MCP 服务器把上面的工具暴露给 Claude Code、Codex CLI、Cursor、Claude Desktop，以及任何支持本地 stdio MCP 的客户端。只做本机进程，没有远程 HTTP。打招呼语和求职信仍由客户端里的模型来写，服务器只保存。
 
-不克隆仓库时，用一行 npx 从 GitHub 启动（这个包是 `private`，不要发到 npm）：
+不克隆仓库时，用一行 npx 从 GitHub 启动（这个包是 `private`，不要发到 npm）。版本固定在 tag `v0.1.0`，与 `package.json` 的 `version` 对齐。
+
+这个 tag 需要在本分支合并进 main 之后，由仓库维护者自己打。打 tag 之前，把命令里的 `#v0.1.0` 换成 `#<commit sha>`。本次改动不会创建这个 tag。
 
 ```bash
-npx -y github:qianjie0720-sys/botjob
+npx -y github:qianjie0720-sys/botjob#v0.1.0
 ```
 
 已经克隆仓库时，仍可 `npm install` 后启动 `node bin/botjob-mcp.js`（或在本仓库里 `npx botjob-mcp`）。不要把 `npm run mcp` 配进客户端：npm 会往 stdout 打一行脚本名，stdio 协议会坏。`npm run mcp` 只适合你自己在终端里看它是否卡住等待输入。
@@ -111,7 +113,7 @@ MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob
+claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
 claude mcp list
 ```
 
@@ -123,7 +125,7 @@ claude mcp list
     "botjob": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob"]
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
     }
   }
 }
@@ -155,7 +157,7 @@ ln -s ../../skills/botjob .claude/skills/botjob
 Codex 把 MCP 配在 `~/.codex/config.toml`（项目级是受信任仓库里的 `.codex/config.toml`）。CLI 和 Codex 桌面端共用这份配置。
 
 ```bash
-codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob
+codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
 codex mcp list
 ```
 
@@ -164,7 +166,7 @@ codex mcp list
 ```toml
 [mcp_servers.botjob]
 command = "npx"
-args = ["-y", "github:qianjie0720-sys/botjob"]
+args = ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
 ```
 
 已经克隆仓库时：
@@ -195,7 +197,7 @@ ln -s ../../skills/botjob .agents/skills/botjob
     "botjob": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob"]
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
     }
   }
 }
@@ -226,7 +228,7 @@ Claude Desktop 的配置文件：macOS 是 `~/Library/Application Support/Claude
   "mcpServers": {
     "botjob": {
       "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob"]
+      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
     }
   }
 }

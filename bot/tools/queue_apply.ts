@@ -27,7 +27,7 @@ export const queueJobSchema = z
 
 export default defineTool({
   description:
-    "Queue one or more job applications for user approval. Parks until the user approves. The same posting (canonical https URL, fragment ignored) does not create another row: the existing record and its status are returned, and an approved or applied row is not moved back to queued. Does NOT log into job boards or silently submit — after approval it records the intent and returns open-to-apply URLs for the user (or a local automation runner) to finish.",
+    "Queue one or more job applications for user approval. Parks until the user approves. The same posting (canonical https URL: query and fragment dropped, trailing slash removed, host lowercased) does not create another row while one is queued, approved, or submitted_manual. failed or skipped opens a new row with the latest letter and requires approval again; the old row stays. Does NOT log into job boards or silently submit — after approval it records the intent and returns open-to-apply URLs for the user (or a local automation runner) to finish.",
   effect: "write",
   needsApproval: true,
   inputSchema: z.object({

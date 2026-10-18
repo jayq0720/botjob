@@ -1,21 +1,21 @@
 {
   "name": "botjob",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "botjob",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
-        "@cursor/bdk": "^0.2.27",
+        "@cursor/bdk": "0.2.27",
         "@modelcontextprotocol/sdk": "1.30.0",
-        "@tesseract.js-data/chi_sim": "^1.0.0",
-        "@tesseract.js-data/eng": "^1.0.0",
-        "pdf-parse": "^2.4.5",
-        "tesseract.js": "^7.0.0",
-        "tsx": "^4.20.0",
-        "zod": "^3.25.0"
+        "@tesseract.js-data/chi_sim": "1.0.0",
+        "@tesseract.js-data/eng": "1.0.0",
+        "pdf-parse": "2.4.5",
+        "tesseract.js": "7.0.0",
+        "tsx": "4.23.15",
+        "zod": "3.25.76"
       },
       "bin": {
         "botjob": "bin/botjob-mcp.js",

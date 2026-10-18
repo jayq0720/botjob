@@ -53,10 +53,19 @@ export function jobUrlAllowed(url: string, board: BoardId): boolean {
   return allowedJobUrl(url) && boardFromUrl(url) === board;
 }
 
-/** Posting identity: URL parser form, fragment removed. */
+/**
+ * Posting identity. All four boards put the job id in the path, not the query:
+ * 智联 `/jobdetail/{id}.htm`, 猎聘 `/job/{id}.shtml`,
+ * 51job `/{city}/{id}.html`, BOSS `/job_detail/{id}.html`.
+ * Host is lowercased, the query and fragment are dropped, and a trailing slash is removed.
+ */
 export function canonicalJobUrl(url: string): string {
   const parsed = new URL(url);
   parsed.hash = "";
+  parsed.search = "";
+  if (parsed.pathname.length > 1) {
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  }
   return parsed.href;
 }
 

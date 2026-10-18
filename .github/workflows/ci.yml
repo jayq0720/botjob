@@ -17,6 +17,8 @@ jobs:
       - run: npm run check
       - run: npx bdk validate --dir .
       - run: npm test
+      - name: pack file list
+        run: node scripts/check-pack-files.mjs
       - name: evals
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}

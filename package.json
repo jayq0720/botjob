@@ -1,6 +1,6 @@
 {
   "name": "botjob",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Resume analyze, JD scoring, and semi-auto apply for 智联/猎聘/51job/BOSS",
@@ -13,7 +13,8 @@
     "bot/",
     "mcp/",
     "skills/",
-    "README.md"
+    "README.md",
+    "npm-shrinkwrap.json"
   ],
   "scripts": {
     "check": "tsc --noEmit",
@@ -23,14 +24,14 @@
     "apply:local": "tsx scripts/local-apply.ts"
   },
   "dependencies": {
-    "@cursor/bdk": "^0.2.27",
+    "@cursor/bdk": "0.2.27",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@tesseract.js-data/chi_sim": "^1.0.0",
-    "@tesseract.js-data/eng": "^1.0.0",
-    "pdf-parse": "^2.4.5",
-    "tesseract.js": "^7.0.0",
-    "tsx": "^4.20.0",
-    "zod": "^3.25.0"
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "pdf-parse": "2.4.5",
+    "tesseract.js": "7.0.0",
+    "tsx": "4.23.15",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

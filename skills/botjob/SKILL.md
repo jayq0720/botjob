@@ -25,17 +25,19 @@ description: >
 
 ## 接入
 
-客户端不克隆仓库时用一行 npx（stdio）。不要把 `npm run mcp` 配进去。
+客户端不克隆仓库时用一行 npx（stdio），版本固定为 tag `v0.1.0`（与 `package.json` 的 `version` 一致）。不要把 `npm run mcp` 配进去。
+
+这个 tag 要在合并到 main 之后由维护者自己打。打 tag 之前，把下面命令里的 `#v0.1.0` 换成 `#<commit sha>`。
 
 ```bash
-npx -y github:qianjie0720-sys/botjob
+npx -y github:qianjie0720-sys/botjob#v0.1.0
 ```
 
-Claude Code：`claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob`
+Claude Code：`claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0`
 
-Codex：`codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob`
+Codex：`codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0`
 
-Cursor / Claude Desktop 的 `mcpServers.botjob`：`command` 为 `npx`，`args` 为 `["-y", "github:qianjie0720-sys/botjob"]`。Cursor 还要 `"type": "stdio"`。
+Cursor / Claude Desktop 的 `mcpServers.botjob`：`command` 为 `npx`，`args` 为 `["-y", "github:qianjie0720-sys/botjob#v0.1.0"]`。Cursor 还要 `"type": "stdio"`。
 
 已经克隆仓库时，改为 `node` 加上仓库里的 `bin/botjob-mcp.js`。
 
@@ -58,7 +60,7 @@ Cursor / Claude Desktop 的 `mcpServers.botjob`：`command` 为 `npx`，`args` �
 - 不编造简历里没有的公司、年限或项目。
 - 大约 200–500 字。
 
-已批准或已投递的申请不能靠 `save_cover_letter` 改话术。再次 `queue_apply` 同一岗位（规范化 URL）只返回原记录和当前状态，不会改回 queued，也不会改掉已批准的话术。
+已批准或已投递的申请不能靠 `save_cover_letter` 改话术。`queued`、`approved`、`submitted_manual` 再次 `queue_apply` 只返回原记录，不会改回 queued，也不会改掉已批准的话术。`failed` 或 `skipped` 会另开一条 `queued`，使用最新话术，并需要重新审批；旧记录保留。
 
 ## 本机投递
 

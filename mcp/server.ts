@@ -272,7 +272,7 @@ export function createBotjobServer(): McpServer {
     {
       title: "加入投递队列",
       description:
-        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL（忽略 fragment）去重：已有记录则返回该记录和当前状态，不新增；已批准或已投递的不会被改回 queued，话术保持不变。只接受智联、猎聘、51job、BOSS 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来必须让用户确认，再调用 approve_apply。",
+        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘、51job、BOSS 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来必须让用户确认，再调用 approve_apply。",
       inputSchema: z.object({
         jobs: z.array(queueJobSchema).min(1).max(10),
         coverNote: z.string().optional().describe("还没单独保存话术时的简短备注"),
