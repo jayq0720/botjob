@@ -1,7 +1,7 @@
 import { defineTool } from "@cursor/bdk/tools";
 import * as z from "zod/v4";
 import { getResume } from "../lib/actions.js";
-import { actionContextFromTool } from "../lib/bdk-context.js";
+import { actionContextFromTool, withDurableSession } from "../lib/bdk-context.js";
 
 export default defineTool({
   description:
@@ -14,6 +14,7 @@ export default defineTool({
       .describe("When true, include full resume text (default true)"),
   }),
   async execute(input, ctx) {
-    return getResume(actionContextFromTool(ctx), input);
+    const action = actionContextFromTool(ctx);
+    return withDurableSession(action, await getResume(action, input));
   },
 });

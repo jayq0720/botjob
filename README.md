@@ -39,7 +39,7 @@ npm run apply:local -- --pack fixtures/sample-apply-pack.json
 
 ## OCR
 
-扫描件 PDF（没有文本层）和 png/jpg 简历使用 [tesseract.js](https://github.com/naptha/tesseract.js)，语言包是 `@tesseract.js-data/chi_sim` 与 `@tesseract.js-data/eng`（随 `npm install` 安装，运行时不下载）。识别前会把两份 `4.0.0_best_int` 语言包复制到临时目录。
+扫描件 PDF（没有文本层）和 png/jpg 简历使用 [tesseract.js](https://github.com/naptha/tesseract.js)。识别只加载 `@tesseract.js-data/chi_sim`（随 `npm install` 安装，运行时不下载；`chi_sim` 已含拉丁字母）。这个 wasm 版本不能把 `chi_sim+eng` 一起传给 worker，否则 stderr 会报 `Failed loading language` 加一个乱码汉字。识别前把 `4.0.0_best_int/chi_sim.traineddata.gz` 复制到临时目录。
 
 限制：
 
@@ -55,9 +55,9 @@ npm run apply:local -- --pack fixtures/sample-apply-pack.json
 只请求这四个站的 https 页面，不带登录态，不处理验证码。常见结果：
 
 - **猎聘**城市搜索页（如 `/city-sh/zhaopin/?key=`）和职位详情页经常能直接解析
-- **智联** `sou.zhaopin.com` 有时直接返回人机验证；Node 跟随跳转后，`www.zhaopin.com/sou` 的搜索页和职位详情页可以解析。公开搜索接口 `fe-api.zhaopin.com` 仍可能返回空列表。未登录时详情页薪资会打码，这时保留列表里的薪资
-- **51job** 常见阿里云 WAF 页面
-- **BOSS** 常见跳到 `security.html`，职位列表接口返回「环境异常」
+- **智联** 城市参数用站点城市 id（上海是 `jl=538`）。`jl=上海` 会跳到全国混排。抓到的列表再按城市和关键词过滤：资历词（高级/资深等）和「工程师」「开发」不单独当关键词，「高级前端工程师」保留「前端」。公开搜索接口 `fe-api.zhaopin.com` 仍可能返回空列表。未登录时详情页薪资会打码，这时保留列表里的薪资
+- **51job** 常见阿里云 WAF，或只有 `interfaceacting.js` / `antidom.js` 的空壳。这时返回「前程无忧被风控拦截」，并建议用本机浏览器打开。不会代为通过验证
+- **BOSS** 常见跳到 `security.html`，或职位列表接口返回「环境异常」。这时返回「BOSS直聘被风控拦截」，并建议用本机浏览器打开。不会代为通过校验
 
 这些都会写进 `fetches` / `score_job` 的失败原因。页面结构变化时同样报解析失败，而不是补假数据。
 
@@ -71,12 +71,37 @@ npx @cursor/bdk info --dir . --json
 npx @cursor/bdk call save_resume --dir . --input '{"text":"...至少40字的简历...","filename":"me.txt"}'
 npm run check                  # tsc --noEmit
 npm test                       # 单元测试，不访问招聘网站
-npx @cursor/bdk dev            # http://127.0.0.1:3000/playground
+npm run eval                   # 没有 CURSOR_API_KEY 时打印跳过并退出 0
+npx @cursor/bdk dev            # 见下方 Playground 地址
 ```
 
-`bdk eval` 需要 API key，CI 里没有 key 时会跳过。
+`bdk eval` 需要 API key。没有 `CURSOR_API_KEY` 时，CI 和 `npm run eval` 都打印 `CURSOR_API_KEY is unset; skipping evals` 并以 0 退出。
+
+不带 `--session` 的 `bdk call` 是一次性 direct 调用。工具结果里没有可复用的 `sessionId`，下一次 `get_resume` 读不到上一次写入。要连续调用，先启动 dev，在 Playground 里得到 `ses_…`，再：
+
+```bash
+npx @cursor/bdk call get_resume --dir . --url http://127.0.0.1:3000/<目录名> --session ses_…
+```
+
+`save_resume` 的 `workspacePath` 是相对路径。先在会话 workspace 里找，找不到再按项目根目录解析，例如 `fixtures/sample-resume.pdf`。仍然只接受 `.pdf`、`.png`、`.jpg`、`.jpeg`、`.txt`，核对文件头，拒绝 `..`、隐藏路径、工作区外的符号链接，以及超过大小上限的文件。找不到文件时只返回「找不到简历文件」，不带临时目录。
 
 仓库自带示例 PDF：`fixtures/sample-resume.pdf`。
+
+### Playground
+
+`bdk dev` 默认是 multi 模式，地址带项目目录名，不是 `/playground`：
+
+```text
+http://127.0.0.1:3000/<目录名>/playground
+```
+
+本仓库在目录 `botjob` 里克隆时是 `http://127.0.0.1:3000/botjob/playground`。目录名是 `workspace` 时是 `http://127.0.0.1:3000/workspace/playground`。`/playground` 在 multi 模式下返回 404。
+
+只要根路径上的 Playground：
+
+```bash
+npx @cursor/bdk dev --mode single   # http://127.0.0.1:3000/playground
+```
 
 Playground 对话示例：
 

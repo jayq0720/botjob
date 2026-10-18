@@ -180,7 +180,7 @@ export function createBotjobServer(): McpServer {
     {
       title: "保存简历",
       description:
-        "保存用户简历。text、本机 filePath、pdfBase64、imageBase64 四选一。文本层 PDF 直接抽取；没有文本层的 PDF 和 png/jpg 走 OCR（chi_sim+eng）。不支持 webp/gif。filePath 只接受 .pdf/.png/.jpg/.jpeg/.txt，核对文件头，最大约 10MB，拒绝隐藏路径和指向隐藏文件的符号链接。保存后请分析并调用 save_resume_profile。",
+        "保存用户简历。text、本机 filePath、pdfBase64、imageBase64 四选一。文本层 PDF 直接抽取；没有文本层的 PDF 和 png/jpg 走 OCR（chi_sim）。不支持 webp/gif。filePath 只接受 .pdf/.png/.jpg/.jpeg/.txt，核对文件头，最大约 10MB，拒绝隐藏路径和指向隐藏文件的符号链接。保存后请分析并调用 save_resume_profile。",
       inputSchema: saveResumeSchema,
       annotations: REPLACE,
     },

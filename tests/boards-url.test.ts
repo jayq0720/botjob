@@ -12,6 +12,8 @@ test("search URLs for four boards", () => {
   assert.equal(packs.length, 4);
   assert.match(byBoard.zhilian, /^https:\/\/sou\.zhaopin\.com\/\?/);
   assert.match(byBoard.zhilian, /kw=/);
+  assert.match(byBoard.zhilian, /jl=538/);
+  assert.doesNotMatch(byBoard.zhilian, /jl=%E4%B8%8A%E6%B5%B7/);
   assert.match(byBoard.liepin, /^https:\/\/www\.liepin\.com\/city-sh\/zhaopin\/\?/);
   assert.match(byBoard.job51, /^https:\/\/we\.51job\.com\/pc\/search\?/);
   assert.match(byBoard.boss, /^https:\/\/www\.zhipin\.com\/web\/geek\/job\?/);

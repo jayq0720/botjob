@@ -1,11 +1,11 @@
 import { defineTool } from "@cursor/bdk/tools";
 import * as z from "zod/v4";
 import { saveResume } from "../lib/actions.js";
-import { actionContextFromTool } from "../lib/bdk-context.js";
+import { actionContextFromTool, withDurableSession } from "../lib/bdk-context.js";
 
 export default defineTool({
   description:
-    "Save the user's resume for this session. Accept plain text, a PDF (pdfBase64 or workspacePath), or a png/jpg image. Image PDFs and photos are OCR'd (chi_sim+eng). Exactly one of text / pdfBase64 / imageBase64 / workspacePath is required.",
+    "Save the user's resume for this session. Accept plain text, a PDF (pdfBase64 or workspacePath), or a png/jpg image. Image PDFs and photos are OCR'd with chi_sim. workspacePath is relative to the session workspace, or to the project root when the file is not in the workspace. Exactly one of text / pdfBase64 / imageBase64 / workspacePath is required. A scratch bdk call does not return a reusable sessionId; reuse a Playground session with --session.",
   effect: "write",
   inputSchema: z
     .object({
@@ -24,7 +24,7 @@ export default defineTool({
         .string()
         .optional()
         .describe(
-          "Relative path under the session workspace to a .pdf, .png, .jpg, or .txt resume",
+          "Relative path to a .pdf, .png, .jpg, .jpeg, or .txt resume. Resolved under the session workspace first, then the project root.",
         ),
       filename: z.string().optional().describe("Original filename if known"),
       source: z.enum(["paste", "upload", "pdf", "image"]).optional(),
@@ -45,6 +45,7 @@ export default defineTool({
     filename: filename ?? "resume.pdf",
   }),
   async execute(input, ctx) {
-    return saveResume(actionContextFromTool(ctx), input);
+    const action = actionContextFromTool(ctx);
+    return withDurableSession(action, await saveResume(action, input));
   },
 });

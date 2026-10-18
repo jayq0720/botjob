@@ -19,6 +19,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
+    "eval": "node scripts/eval.mjs",
     "dev": "bdk dev",
     "mcp": "tsx mcp/stdio.ts",
     "apply:local": "tsx scripts/local-apply.ts"

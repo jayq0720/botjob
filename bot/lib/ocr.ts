@@ -8,7 +8,11 @@ export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MIN_OCR_CHARS = 20;
 
 const require = createRequire(import.meta.url);
-const LANGS = ["chi_sim", "eng"] as const;
+// chi_sim already contains the latin glyphs we need. Passing "chi_sim+eng" to
+// this wasm build prints stderr `Failed loading language '<one CJK char>'`
+// (the combined language argument is mis-decoded). eng alone is clean but
+// drops Chinese; eng+chi_sim is clean but misreads names. Load chi_sim only.
+const LANGS = ["chi_sim"] as const;
 
 export function collapseCjkSpaces(text: string): string {
   let current = text;
@@ -52,7 +56,7 @@ async function ensureLangDir(): Promise<string> {
 
 async function openWorker(): Promise<Worker> {
   const langPath = await ensureLangDir();
-  return createWorker("chi_sim+eng", 1, {
+  return createWorker("chi_sim", 1, {
     langPath,
     cachePath: langPath,
     gzip: true,

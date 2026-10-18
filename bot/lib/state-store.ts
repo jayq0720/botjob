@@ -20,10 +20,16 @@ export type ActionContext = {
   /** Eval, dry-run, or BOTJOB_OFFLINE. Skips board fetches unless a tool opts in. */
   offline: boolean;
   /**
-   * BDK `queue_apply` already passed the approval card, so the record is approved.
-   * MCP has no approval card; the record stays queued until `approve_apply`.
+   * `approved` only after a real approval: BDK sets this when `approvedBy` is
+   * present, MCP stays `queued` until `approve_apply`. Direct tool calls do not
+   * approve themselves.
    */
   queueStatus: "approved" | "queued";
+  /**
+   * Real sessions (Playground, `bdk call --session`) can be reused. Scratch
+   * direct calls omit `sessionId` from the tool result.
+   */
+  durableSession?: boolean;
   /** MCP may read an absolute resume path. BDK only allows a workspace-relative path. */
   allowAbsoluteResumePath: boolean;
   /** MCP pack command uses an absolute path. BDK keeps the workspace-relative path. */
