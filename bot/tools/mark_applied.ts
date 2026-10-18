@@ -7,7 +7,7 @@ const outcomeSchema = z.enum(["applied", "skipped", "failed"]);
 
 export default defineTool({
   description:
-    "Update application statuses after the local semi-auto runner finishes (or after the user applied manually). Map applied→submitted_manual, skipped→skipped, failed→failed.",
+    "Update application statuses after the local semi-auto runner finishes (or after the user applied manually). Only rows already approved are updated. Map applied→submitted_manual, skipped→skipped, failed→failed. Queued and other statuses are ignored.",
   effect: "write",
   inputSchema: z.object({
     results: z

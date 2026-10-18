@@ -5,6 +5,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import * as z from "zod/v4";
 import {
+  applicationSnapshotHash,
+  approvalBundleHash,
   approveApplications,
   exportApplyPack,
   getResume,
@@ -37,7 +39,7 @@ BDK 的 queue_apply 自带审批卡片。这个 stdio 服务器没有审批卡�
 
 1. queue_apply 只把申请标成 queued。
 2. 向用户展示岗位、链接、打招呼语和求职信，得到明确同意。
-3. 调用 approve_apply。它会用 MCP elicitation 再确认一次。客户端不支持 elicitation 时，只有用户已经同意才传 confirm: true。
+3. 调用 approve_apply。它会用 MCP elicitation 再确认一次，弹窗里有打招呼语和求职信。只批准弹窗列出的 id，并且话术和链接的哈希必须和弹窗时一致。客户端不支持 elicitation 时，先调用一次拿到 snapshotHash，用户明确同意后再带 confirm: true 和这个哈希。只传 confirm 不会批准。没有弹窗时，模型仍可能自行回传哈希，这不是人工确认。
 4. 然后 export_apply_pack。未批准的岗位不能导出。
 5. 把 localCommand 给用户。投递是用户本机 npm run apply:local，逐条确认。不要自己开浏览器，不要代按发送。
 `;
@@ -60,7 +62,9 @@ const saveResumeSchema = z
     filePath: z
       .string()
       .optional()
-      .describe("本机简历路径，可以是绝对路径。支持 .pdf、扫描件 PDF、.png、.jpg、.txt。"),
+      .describe(
+        "本机简历绝对路径。只接受 .pdf、.png、.jpg、.jpeg、.txt，并核对文件头（txt 必须是合法 UTF-8）。读前限制约 10MB。拒绝隐藏文件、任意一级隐藏目录，以及解析符号链接后指向它们的路径。",
+      ),
     filename: z.string().optional().describe("原始文件名，可选。"),
     source: z.enum(["paste", "upload", "pdf", "image"]).optional(),
   })
@@ -176,7 +180,7 @@ export function createBotjobServer(): McpServer {
     {
       title: "保存简历",
       description:
-        "保存用户简历。text、本机 filePath、pdfBase64、imageBase64 四选一。文本层 PDF 直接抽取；没有文本层的 PDF 和 png/jpg 走 OCR（chi_sim+eng）。不支持 webp/gif。保存后请分析并调用 save_resume_profile。",
+        "保存用户简历。text、本机 filePath、pdfBase64、imageBase64 四选一。文本层 PDF 直接抽取；没有文本层的 PDF 和 png/jpg 走 OCR（chi_sim+eng）。不支持 webp/gif。filePath 只接受 .pdf/.png/.jpg/.jpeg/.txt，核对文件头，最大约 10MB，拒绝隐藏路径和指向隐藏文件的符号链接。保存后请分析并调用 save_resume_profile。",
       inputSchema: saveResumeSchema,
       annotations: REPLACE,
     },
@@ -283,17 +287,23 @@ export function createBotjobServer(): McpServer {
     {
       title: "批准投递",
       description:
-        "把 queued 申请标为已批准。必须先让用户看过岗位、链接、打招呼语和求职信并明确同意，然后才能调用。调用时会用 MCP elicitation 再向用户确认；客户端不支持 elicitation 时，只有 confirm 为 true（且你确认用户已经同意）才会批准。未确认不要调用，也不要擅自传 confirm。批准后话术不能再改。批准不会打开浏览器。",
+        "把弹窗里列出的 queued 申请标为已批准。必须先让用户看过岗位、链接、打招呼语和求职信并明确同意。调用时用 MCP elicitation 再确认，弹窗包含求职信。只批准当时列出的 id，并核对话术和 URL 的哈希，不一致则整批不批。客户端不支持 elicitation 时，先调用一次取得 snapshotHash，用户同意后再传 confirm: true 和同一个 snapshotHash；只传 confirm 不会批准。没有弹窗时模型可以自行回传哈希，这不是人工确认。批准后话术不能再改。批准不会打开浏览器。",
       inputSchema: z.object({
         ids: z
           .array(z.string())
           .optional()
-          .describe("要批准的申请 id。省略则批准当前所有排队申请。"),
+          .describe("要展示并批准的申请 id。省略则只针对本次调用时已经排队的申请，确认期间新加入的不会被批准。"),
         confirm: z
           .boolean()
           .optional()
           .describe(
-            "仅当客户端不支持 MCP elicitation 时使用。必须在用户明确同意后才传 true。支持 elicitation 时以弹窗结果为准。",
+            "仅当客户端不支持 MCP elicitation 时使用。必须和 snapshotHash 一起传，且用户已经同意这次列出的内容。支持 elicitation 时以弹窗结果为准，confirm 无效。",
+          ),
+        snapshotHash: z
+          .string()
+          .optional()
+          .describe(
+            "上一次 approve_apply 返回的 snapshotHash。绑定当时列出的申请 id、链接、打招呼语和求职信。内容变化后旧哈希不能批准。",
           ),
       }),
       annotations: {
@@ -306,25 +316,50 @@ export function createBotjobServer(): McpServer {
     async (args, extra) => {
       try {
         const listed = await listApplications(ctx());
-        const ids = args.ids?.filter((id) => id.trim());
+        const requested = args.ids?.map((id) => id.trim()).filter((id) => id.length > 0);
         const queued = listed.applications.filter(
-          (app) => app.status === "queued" && (!ids?.length || ids.includes(app.id)),
+          (app) => app.status === "queued" && (!requested?.length || requested.includes(app.id)),
         );
         if (queued.length === 0) {
-          return toolResult(await approveApplications(ctx(), { ids }));
+          return toolResult(
+            await approveApplications(ctx(), { ids: requested ?? [], snapshots: {} }),
+          );
         }
-        const lines = queued.map(
-          (app) =>
-            `- ${app.title}｜${app.company}｜${app.board}｜${app.url}\n  打招呼语：${app.greeting ?? "（无）"}`,
+        const ids = queued.map((app) => app.id);
+        const snapshots = Object.fromEntries(
+          queued.map((app) => [
+            app.id,
+            applicationSnapshotHash({
+              id: app.id,
+              url: app.url,
+              greeting: app.greeting,
+              coverLetter: app.coverLetter,
+            }),
+          ]),
         );
+        const snapshotHash = approvalBundleHash(ids, snapshots);
+        const lines = queued.map((app) => {
+          const letter = summarizeLetter(app.coverLetter);
+          return `- ${app.title}｜${app.company}｜${app.board}｜${app.url}\n  打招呼语：${app.greeting ?? "（无）"}\n  求职信：${letter}`;
+        });
         const decision = await userConfirmed(
           server,
           extra,
           `请确认是否批准下面 ${queued.length} 条申请。批准后才能导出投递包，打招呼语和求职信将不能再改。服务器不会打开浏览器。\n\n${lines.join("\n")}`,
           args.confirm,
+          args.snapshotHash,
+          snapshotHash,
         );
-        if (!decision.ok) return toolResult({ approved: false, message: decision.message });
-        return toolResult(await approveApplications(ctx(), { ids }));
+        if (!decision.ok) {
+          return toolResult({
+            approved: false,
+            message: decision.message,
+            ids,
+            snapshotHash,
+            snapshots,
+          });
+        }
+        return toolResult(await approveApplications(ctx(), { ids, snapshots }));
       } catch (err) {
         return toolError(err instanceof Error ? err.message : String(err));
       }
@@ -359,7 +394,7 @@ export function createBotjobServer(): McpServer {
     {
       title: "回写投递结果",
       description:
-        "用户在本机跑完 npm run apply:local 之后，按 results 回写状态。applied 记为 submitted_manual，skipped 记为 skipped，failed 记为 failed。",
+        "用户在本机跑完 npm run apply:local 之后，按 results 回写状态。只处理已经批准的申请。applied 记为 submitted_manual，skipped 记为 skipped，failed 记为 failed。queued 或其它状态会忽略。",
       inputSchema: z.object({
         results: z
           .array(
@@ -446,11 +481,20 @@ async function run<T>(fn: () => Promise<T>) {
   }
 }
 
+function summarizeLetter(letter: string | undefined): string {
+  const text = letter?.trim();
+  if (!text) return "（无）";
+  if (text.length <= 180) return text;
+  return `${text.slice(0, 180)}…`;
+}
+
 async function userConfirmed(
   server: McpServer,
   extra: ToolExtra,
   message: string,
   confirm: boolean | undefined,
+  snapshotHash: string | undefined,
+  expectedHash: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
     const result = await server.server.elicitInput(
@@ -480,11 +524,18 @@ async function userConfirmed(
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err);
     if (/does not support form elicitation|does not support elicitation/i.test(text)) {
-      if (confirm === true) return { ok: true };
+      if (confirm === true && snapshotHash === expectedHash) return { ok: true };
+      if (confirm === true) {
+        return {
+          ok: false,
+          message:
+            "申请内容与确认时不一致，未批准。confirm: true 必须带上本次列出的 snapshotHash。只传 confirm 不会批准。不支持 elicitation 时没有人工弹窗，模型可以自行回传哈希，请优先使用支持 form elicitation 的客户端。",
+        };
+      }
       return {
         ok: false,
         message:
-          "当前客户端不支持 MCP elicitation。请先向用户展示岗位和话术并得到明确同意，然后带 confirm: true 再调用 approve_apply。未确认时不要传 true。",
+          "当前客户端不支持 MCP elicitation。请先向用户展示岗位、链接、打招呼语和求职信。用户明确同意后，再带 confirm: true 和这次返回的 snapshotHash 调用 approve_apply。只传 confirm 不会批准。没有弹窗时模型可以自行回传哈希，这不是人工确认。",
       };
     }
     throw err;

@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { applyPackPath, applicationsToPack } from "./apply-pack.js";
 import { fetchBoard, fetchJobUrl } from "./boards/fetch.js";
@@ -59,6 +60,13 @@ type SavedResume = {
   ocr?: boolean;
 };
 
+/** Local MCP `filePath` cap. Checked with stat before any read. */
+export const MAX_LOCAL_RESUME_BYTES = 10 * 1024 * 1024;
+
+const LOCAL_RESUME_EXT = new Set([".pdf", ".png", ".jpg", ".jpeg", ".txt"]);
+
+type LocalResumeKind = "pdf" | "png" | "jpeg" | "txt";
+
 export async function saveResume(ctx: ActionContext, input: SaveResumeInput) {
   const { text, pdfBase64, imageBase64, workspacePath, filePath, filename, source } = input;
   const sources = [text, pdfBase64, imageBase64, workspacePath, filePath].filter((item) =>
@@ -105,6 +113,7 @@ export async function saveResume(ctx: ActionContext, input: SaveResumeInput) {
       filename: filename?.trim() || loaded.filename,
       source,
       relHint: loaded.relHint,
+      kind: loaded.kind,
     });
   }
 
@@ -122,18 +131,12 @@ export async function saveResume(ctx: ActionContext, input: SaveResumeInput) {
 async function loadResumeFile(
   ctx: ActionContext,
   input: { workspacePath?: string; filePath?: string },
-): Promise<{ bytes: Uint8Array; filename: string; relHint: string }> {
+): Promise<{ bytes: Uint8Array; filename: string; relHint: string; kind?: LocalResumeKind }> {
   if (input.filePath) {
     if (!ctx.allowAbsoluteResumePath) {
       throw new Error("filePath is only available on the local MCP server");
     }
-    if (input.filePath.includes("\0")) throw new Error("非法路径");
-    const abs = path.resolve(input.filePath);
-    return {
-      bytes: new Uint8Array(await readFile(abs)),
-      filename: path.basename(abs),
-      relHint: abs,
-    };
+    return readLocalResumeFile(input.filePath);
   }
   const rel = input.workspacePath!.replace(/^\/+/, "");
   if (rel.includes("..") || path.isAbsolute(rel)) {
@@ -147,13 +150,100 @@ async function loadResumeFile(
   };
 }
 
+function hasHiddenSegment(absPath: string): boolean {
+  return absPath
+    .split(/[\\/]/)
+    .filter((part) => part.length > 0)
+    .some((part) => part.startsWith("."));
+}
+
+function kindForExtension(ext: string): LocalResumeKind | undefined {
+  if (ext === ".pdf") return "pdf";
+  if (ext === ".png") return "png";
+  if (ext === ".jpg" || ext === ".jpeg") return "jpeg";
+  if (ext === ".txt") return "txt";
+  return undefined;
+}
+
+function assertLocalResumeBytes(kind: LocalResumeKind, bytes: Uint8Array): void {
+  if (kind === "pdf") {
+    if (!isPdfBytes(bytes)) throw new Error("文件内容与扩展名不符");
+    return;
+  }
+  if (kind === "png" || kind === "jpeg") {
+    if (sniffImage(bytes) !== kind) throw new Error("文件内容与扩展名不符");
+    return;
+  }
+  if (bytes.includes(0)) throw new Error("txt 简历必须是合法 UTF-8 文本");
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("txt 简历必须是合法 UTF-8 文本");
+  }
+}
+
+/** Absolute MCP resume path: extension, magic bytes, size, and no hidden path or symlink target. */
+async function readLocalResumeFile(
+  filePath: string,
+): Promise<{ bytes: Uint8Array; filename: string; relHint: string; kind: LocalResumeKind }> {
+  if (filePath.includes("\0")) throw new Error("非法路径");
+  const abs = path.resolve(filePath);
+  if (hasHiddenSegment(abs)) throw new Error("不读取隐藏文件或隐藏目录");
+  let real: string;
+  try {
+    real = await realpath(abs);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new Error("找不到简历文件");
+    throw err;
+  }
+  if (hasHiddenSegment(real)) throw new Error("不读取隐藏文件或隐藏目录");
+  const kind = kindForExtension(path.extname(real).toLowerCase());
+  if (!kind || !LOCAL_RESUME_EXT.has(path.extname(real).toLowerCase())) {
+    throw new Error("只接受 .pdf、.png、.jpg、.jpeg、.txt 简历");
+  }
+  let info;
+  try {
+    info = await stat(real);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new Error("找不到简历文件");
+    throw err;
+  }
+  if (!info.isFile()) throw new Error("简历路径必须是普通文件");
+  if (info.size > MAX_LOCAL_RESUME_BYTES) {
+    throw new Error(`简历文件超过 ${MAX_LOCAL_RESUME_BYTES} 字节上限`);
+  }
+  const bytes = new Uint8Array(await readFile(real));
+  if (bytes.byteLength > MAX_LOCAL_RESUME_BYTES) {
+    throw new Error(`简历文件超过 ${MAX_LOCAL_RESUME_BYTES} 字节上限`);
+  }
+  assertLocalResumeBytes(kind, bytes);
+  return { bytes, filename: path.basename(real), relHint: real, kind };
+}
+
 async function saveResumeBytes(
   ctx: ActionContext,
   bytes: Uint8Array,
-  args: { filename: string; source?: ResumeMeta["source"]; relHint: string },
+  args: {
+    filename: string;
+    source?: ResumeMeta["source"];
+    relHint: string;
+    kind?: LocalResumeKind;
+  },
 ) {
   const rel = args.relHint;
-  if (isPdfBytes(bytes) || rel.toLowerCase().endsWith(".pdf")) {
+  if (args.kind === "txt") {
+    const asText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const saved = await persistResumeText(ctx.store, ctx.sessionId, {
+      text: asText,
+      filename: args.filename,
+      source: args.source ?? "upload",
+    });
+    return {
+      ...saved,
+      next: "Analyze the resume, then call save_resume_profile with a structured profile.",
+    };
+  }
+  if (args.kind === "pdf" || (!args.kind && (isPdfBytes(bytes) || rel.toLowerCase().endsWith(".pdf")))) {
     // pdf.js moves this buffer into its worker. Keep a separate copy to store.
     const pdfBytes = new Uint8Array(bytes);
     const extracted = await extractTextFromPdf(bytes);
@@ -167,7 +257,11 @@ async function saveResumeBytes(
     });
     return preview(saved, extracted.text, extracted.ocr);
   }
-  if (sniffImage(bytes) || /\.(png|jpe?g)$/i.test(rel)) {
+  if (
+    args.kind === "png" ||
+    args.kind === "jpeg" ||
+    (!args.kind && (sniffImage(bytes) || /\.(png|jpe?g)$/i.test(rel)))
+  ) {
     if (bytes.byteLength > MAX_IMAGE_BYTES) {
       throw new Error(`图片超过 ${MAX_IMAGE_BYTES} 字节上限`);
     }
@@ -710,29 +804,82 @@ export async function queueApply(
     nextSteps: [
       "这些申请状态是 queued，还没有批准。",
       "向用户展示岗位、链接、打招呼语和求职信，得到明确同意后再调用 approve_apply。",
-      "approve_apply 会用 MCP elicitation 向用户确认；客户端不支持时，只有用户同意后才传 confirm: true。",
+      "approve_apply 会用 MCP elicitation 向用户确认。客户端不支持时，先取回 snapshotHash，用户同意后再带 confirm: true 和这个哈希；只传 confirm 不会批准。",
       "只有已批准的岗位才能 export_apply_pack。不要打开浏览器。",
     ],
     note: "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
   };
 }
 
-export async function approveApplications(ctx: ActionContext, input: { ids?: string[] }) {
+export function applicationSnapshotHash(app: {
+  id: string;
+  url: string;
+  greeting?: string;
+  coverLetter?: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: app.id,
+        url: app.url,
+        greeting: app.greeting ?? "",
+        coverLetter: app.coverLetter ?? "",
+      }),
+    )
+    .digest("hex");
+}
+
+/** Hash of the exact ids shown to the user, in stable order. */
+export function approvalBundleHash(ids: string[], snapshots: Record<string, string>): string {
+  const body = [...ids]
+    .sort()
+    .map((id) => `${id}:${snapshots[id] ?? ""}`)
+    .join("\n");
+  return createHash("sha256").update(body).digest("hex");
+}
+
+const SNAPSHOT_MISMATCH =
+  "申请内容与确认时不一致，未批准。请重新查看岗位、链接、打招呼语和求职信。";
+
+export async function approveApplications(
+  ctx: ActionContext,
+  input: { ids: string[]; snapshots: Record<string, string> },
+) {
   const apps =
     ((await ctx.store.get(applicationsKey(ctx.sessionId))) as ApplicationRecord[] | undefined) ??
     [];
-  const ids = input.ids?.filter((id) => id.trim());
-  const pool = ids?.length ? apps.filter((app) => ids.includes(app.id)) : apps;
-  const missing = ids?.filter((id) => !apps.some((app) => app.id === id)) ?? [];
-  const queued = pool.filter((app) => app.status === "queued");
-  if (queued.length === 0) {
+  const ids = [...new Set(input.ids.map((id) => id.trim()).filter((id) => id.length > 0))];
+  if (ids.length === 0) {
     return {
       approved: false as const,
       count: 0,
-      missing,
-      message: ids?.length
-        ? "这些 id 里没有排队中的申请。已批准的话术不会被改写。"
-        : "没有排队中的申请。请先 queue_apply。",
+      mismatched: [] as string[],
+      message: "没有要批准的申请。请先 queue_apply。",
+    };
+  }
+  const mismatched: string[] = [];
+  const queued: ApplicationRecord[] = [];
+  for (const id of ids) {
+    const app = apps.find((item) => item.id === id);
+    if (!app || app.status !== "queued") {
+      mismatched.push(id);
+      continue;
+    }
+    const hash = applicationSnapshotHash({
+      id: app.id,
+      url: app.job.url,
+      greeting: app.greeting,
+      coverLetter: app.coverLetter,
+    });
+    if (hash !== input.snapshots[id]) mismatched.push(id);
+    else queued.push(app);
+  }
+  if (mismatched.length > 0 || queued.length !== ids.length) {
+    return {
+      approved: false as const,
+      count: 0,
+      mismatched,
+      message: SNAPSHOT_MISMATCH,
     };
   }
   const now = new Date().toISOString();
@@ -744,7 +891,7 @@ export async function approveApplications(ctx: ActionContext, input: { ids?: str
   return {
     approved: true as const,
     count: queued.length,
-    missing,
+    mismatched,
     applications: updated
       .filter((app) => approvedIds.has(app.id))
       .map((app) => ({
@@ -853,9 +1000,14 @@ export async function markApplied(
   const now = new Date().toISOString();
   const byId = new Map(input.results.map((result) => [result.id, result]));
   let changed = 0;
+  const ignored: string[] = [];
   const updated = apps.map((app) => {
     const result = byId.get(app.id);
     if (!result) return app;
+    if (app.status !== "approved") {
+      ignored.push(app.id);
+      return app;
+    }
     changed += 1;
     const status: ApplicationRecord["status"] =
       result.outcome === "applied"
@@ -871,12 +1023,24 @@ export async function markApplied(
     };
   });
 
+  if (changed === 0) {
+    return {
+      updated: false as const,
+      changed: 0,
+      ignored,
+      message: ignored.length
+        ? "只有已批准的申请可以回写。这些记录不是已批准，已忽略。"
+        : "没有匹配到已批准的申请。",
+    };
+  }
+
   await ctx.store.put(applicationsKey(ctx.sessionId), updated);
   return {
     updated: true as const,
     changed,
+    ignored,
     applications: updated
-      .filter((app) => byId.has(app.id))
+      .filter((app) => byId.has(app.id) && !ignored.includes(app.id))
       .map((app) => ({
         id: app.id,
         status: app.status,

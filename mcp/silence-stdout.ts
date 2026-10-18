@@ -1,4 +1,9 @@
-/** stdio MCP framing owns stdout. Libraries that log must not write there. */
-console.log = (...args: unknown[]) => {
-  console.error(...args);
-};
+/** stdio MCP framing owns stdout. These console methods must not write there. */
+export {};
+const toStderr = console.error.bind(console);
+console.log = toStderr;
+console.info = toStderr;
+console.debug = toStderr;
+console.dir = toStderr as typeof console.dir;
+console.table = toStderr as typeof console.table;
+console.trace = toStderr as typeof console.trace;

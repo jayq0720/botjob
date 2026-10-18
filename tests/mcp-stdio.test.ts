@@ -222,11 +222,26 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     );
     assert.equal(unconfirmed.approved, false);
     assert.match(String(unconfirmed.message), /confirm/);
+    assert.match(String(unconfirmed.snapshotHash), /^[a-f0-9]{64}$/);
+    assert.deepEqual(unconfirmed.ids, [applicationId]);
+
+    const bareConfirm = jsonResult(
+      await session.client.callTool({
+        name: "approve_apply",
+        arguments: { ids: [applicationId], confirm: true },
+      }),
+    );
+    assert.equal(bareConfirm.approved, false);
+    assert.match(String(bareConfirm.message), /snapshotHash/);
 
     const approved = jsonResult(
       await session.client.callTool({
         name: "approve_apply",
-        arguments: { ids: [applicationId], confirm: true },
+        arguments: {
+          ids: [applicationId],
+          confirm: true,
+          snapshotHash: unconfirmed.snapshotHash,
+        },
       }),
     );
     assert.equal(approved.approved, true);
@@ -293,6 +308,8 @@ test("approve_apply uses elicitation when the client supports it", { timeout: 30
   const home = await mkdtemp(path.join(tmpdir(), "botjob-mcp-elicit-"));
   const accepted = await connect(home, async (message) => {
     assert.match(message, /星河科技/);
+    assert.match(message, /求职信/);
+    assert.ok(message.includes(coverLetter));
     return { action: "accept", content: { confirm: true } };
   });
   try {
@@ -328,7 +345,74 @@ test("approve_apply uses elicitation when the client supports it", { timeout: 30
   }
 });
 
-async function seedQueued(client: Client) {
+test("approve_apply rejects content changed while the dialog is open", { timeout: 60_000 }, async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "botjob-mcp-race-"));
+  let applicationId = "";
+  const other = await connect(home);
+  const session = await connect(home, async (message) => {
+    assert.match(message, /求职信/);
+    assert.ok(message.includes(coverLetter));
+    assert.ok(message.includes(greeting));
+    const changed = jsonResult(
+      await other.client.callTool({
+        name: "save_cover_letter",
+        arguments: {
+          jobId: applicationId,
+          greeting: "确认期间被改掉的打招呼语。",
+          coverLetter: "确认期间被改掉的求职信，不应该被这次弹窗批准。",
+        },
+      }),
+    );
+    assert.equal(changed.saved, true);
+    jsonResult(
+      await other.client.callTool({
+        name: "queue_apply",
+        arguments: {
+          jobs: [
+            {
+              id: "late-job",
+              board: "liepin",
+              title: "后端工程师",
+              company: "迟到公司",
+              city: "北京",
+              url: "https://www.liepin.com/job/late.htm",
+              matchReason: "确认期间才入队",
+              matchScore: 1,
+            },
+          ],
+        },
+      }),
+    );
+    return { action: "accept", content: { confirm: true } };
+  });
+  try {
+    const seeded = await seedQueued(session.client);
+    applicationId = seeded.applicationId;
+    const decision = jsonResult(
+      await session.client.callTool({ name: "approve_apply", arguments: {} }),
+    );
+    assert.equal(decision.approved, false);
+    assert.match(String(decision.message), /不一致/);
+    const apps = jsonResult(
+      await session.client.callTool({ name: "list_applications", arguments: {} }),
+    );
+    const original = apps.applications.find((app: { id: string }) => app.id === applicationId);
+    const late = apps.applications.find((app: { company: string }) => app.company === "迟到公司");
+    assert.equal(original.status, "queued");
+    assert.match(original.greeting, /确认期间/);
+    assert.equal(late.status, "queued");
+    assert.equal(
+      apps.applications.some((app: { status: string }) => app.status === "approved"),
+      false,
+    );
+  } finally {
+    await session.close();
+    await other.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+async function seedQueued(client: Client): Promise<{ applicationId: string; jobId: string }> {
   const html = await readFile(detailHtml, "utf8");
   jsonResult(
     await client.callTool({
@@ -369,4 +453,8 @@ async function seedQueued(client: Client) {
     }),
   );
   assert.equal(queued.applications[0].status, "queued");
+  return {
+    applicationId: queued.applications[0].id as string,
+    jobId: scored.job.id as string,
+  };
 }

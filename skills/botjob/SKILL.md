@@ -17,7 +17,7 @@ description: >
 3. `search_jobs` 展示各站搜索链接。只讨论 `listings` 里的真实岗位；`fetches` 的失败原因原样告诉用户。用户贴了 JD 或岗位链接时改用 `score_job`。已有详情 HTML 时把 HTML 和该站 https 链接一起交给 `score_job`，这样不会访问网络。
 4. 对准备投的岗位写打招呼语和求职信，再 `save_cover_letter`。
 5. `queue_apply`。此时状态是 `queued`，还没批准。
-6. 把岗位、链接、打招呼语、求职信给用户看。用户明确同意后调用 `approve_apply`。工具会用 MCP elicitation 再确认；客户端不支持时，只有用户已经同意才传 `confirm: true`。不要擅自传 `confirm`。
+6. 把岗位、链接、打招呼语、求职信给用户看。用户明确同意后调用 `approve_apply`。工具会用 MCP elicitation 再确认，弹窗里有求职信；只批准弹窗列出的申请，话术或链接变了就不批。客户端不支持 elicitation 时，先调用一次读取 `snapshotHash`，用户已经同意后再传 `confirm: true` 和这个哈希。不要只传 `confirm`。没有弹窗时，你仍可能自行回传哈希，那不是用户点选；能用 elicitation 就用 elicitation。
 7. `export_apply_pack`。没批准的岗位不会出现在包里。把返回的 `localCommand` 交给用户，让用户在 botjob 仓库里自己运行。
 8. 用户跑完 `npm run apply:local` 后，用 `mark_applied` 回写。
 
@@ -59,6 +59,6 @@ BOSS 上点「立即沟通」可能会立即发出平台默认招呼语。脚本
 ## 不要
 
 - 抓取失败时编造公司和 JD，或用示例公司冒充真实岗位。
-- 在用户确认前调用 `approve_apply`，或在不支持 elicitation 时自己填 `confirm: true`。
+- 在用户确认前调用 `approve_apply`，或在不支持 elicitation 时自己填 `confirm: true` 和 `snapshotHash`。
 - 索要招聘网站密码，或解释如何绕过验证码。
 - 没有画像就搜岗、打分。

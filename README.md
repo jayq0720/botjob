@@ -90,7 +90,13 @@ stdio MCP 服务器把上面的工具暴露给 Claude Code、Codex CLI、Cursor�
 
 状态在 `~/.botjob/data/`（`kv.json` 和简历文件）。设置 `BOTJOB_HOME` 可以改掉 `~/.botjob` 这一层。浏览器登录态仍是 `~/.botjob/browser-profile`，跟数据目录分开。
 
-MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模型必须先请你看岗位、链接和话术；`approve_apply` 会再用 MCP elicitation 弹一次确认。客户端不支持 elicitation 时，只有你已经同意，模型才可以传 `confirm: true`。没批准的岗位不能 `export_apply_pack`。服务器不打开浏览器。你拿到 `localCommand` 后，自己在仓库里跑 `npm run apply:local`，逐条确认。
+MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模型必须先请你看岗位、链接、打招呼语和求职信；`approve_apply` 会再用 MCP elicitation 弹一次确认，弹窗里包含这些内容。服务器只批准弹窗列出的申请，并核对话术和链接的哈希，对不上就不批。
+
+客户端不支持 elicitation 时没有人工弹窗。模型要先调用一次拿到 `snapshotHash`，你明确同意后再带 `confirm: true` 和同一个哈希。只传 `confirm: true` 不会批准。风险：哈希会回到模型上下文里，不支持弹窗的客户端上，模型可以不经你点选就自己把哈希传回去，从而批准它刚读到的内容。请优先使用声明了 form elicitation 的客户端。
+
+`save_resume` 的本机路径只接受 `.pdf`、`.png`、`.jpg`、`.jpeg`、`.txt`，核对文件头（txt 必须是合法 UTF-8），读之前限制约 10MB，并拒绝隐藏文件、隐藏目录和指向它们的符号链接。
+
+没批准的岗位不能 `export_apply_pack`。`mark_applied` 只回写已经批准的申请。服务器不打开浏览器。你拿到 `localCommand` 后，自己在仓库里跑 `npm run apply:local`，逐条确认。
 
 服务器启动时会把 `bot/skills/job-hunt` 的流程和写作规范做成 prompt `job-hunt`，以及 resource `botjob://skills/job-hunt`。给 Claude Code / Codex 用的同一份说明在 `skills/botjob/SKILL.md`。
 
