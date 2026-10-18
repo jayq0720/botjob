@@ -14,8 +14,9 @@ export async function persistResumeText(
     source: ResumeMeta["source"];
     pageCount?: number;
     pdfBytes?: Uint8Array;
+    ocr?: boolean;
   },
-): Promise<{ saved: true; filename: string; charCount: number; pageCount?: number }> {
+): Promise<{ saved: true; filename: string; charCount: number; pageCount?: number; ocr?: boolean }> {
   const sessionId = ctx.session.id;
   const cleaned = args.text.replace(/\r\n/g, "\n").trim();
   const files = ctx.host.files.forSession(sessionId);
@@ -30,6 +31,7 @@ export async function persistResumeText(
     source: args.source,
     pageCount: args.pageCount,
     hasPdf: Boolean(args.pdfBytes),
+    ocr: args.ocr,
   };
   await ctx.host.kv.put(resumeMetaKey(sessionId), meta);
   return {
@@ -37,5 +39,6 @@ export async function persistResumeText(
     filename: meta.filename,
     charCount: meta.charCount,
     pageCount: meta.pageCount,
+    ocr: meta.ocr,
   };
 }

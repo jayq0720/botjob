@@ -14,7 +14,7 @@ export function zhilianSearch(criteria: SearchCriteria): BoardSearchPack {
     searchUrl,
     query,
     cityHint: city,
-    notes: "打开链接后请登录智联账号，按筛选条件核对岗位再投递。",
+    notes: "搜索页有时能直接看到职位。遇到验证码请改贴 JD，不要绕过校验。未登录时详情页薪资可能被打码。",
   };
 }
 

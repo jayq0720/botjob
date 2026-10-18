@@ -13,9 +13,12 @@ import { stdin as input, stdout as output } from "node:process";
 import { homedir } from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import {
+  assertApplyTarget,
   boardApplyHints,
-  type ApplyPack,
+  parseApplyPack,
+  type ApplyPackItem,
   type ApplyRunReport,
   type ApplyRunResult,
 } from "../bot/lib/apply-pack.js";
@@ -61,8 +64,11 @@ Usage:
   npm run apply:local -- --pack <apply-pack.json> [--dry-run] [--profile DIR] [--limit N]
 
 Keys per job (headed mode):
-  a  mark applied (you already clicked apply in the browser)
-  c  try to click a detected apply button (asks again to confirm)
+  a  mark applied (you already clicked apply / send in the browser)
+  c  try to click 申请 or 立即沟通 (asks again; BOSS may send the site's default greeting)
+  f  fill the greeting into a visible input (asks again; does not press send)
+  p  copy the greeting to the clipboard
+  l  copy the cover letter to the clipboard
   s  skip
   q  quit remaining
 `);
@@ -76,7 +82,7 @@ async function prompt(rl: ReturnType<typeof createInterface>, q: string) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const packAbs = path.resolve(args.pack);
-  const pack = JSON.parse(await readFile(packAbs, "utf8")) as ApplyPack;
+  const pack = parseApplyPack(await readFile(packAbs, "utf8"));
   if (pack.version !== 1 || !Array.isArray(pack.items)) {
     throw new Error("Invalid apply pack: expected version 1 with items[]");
   }
@@ -91,7 +97,8 @@ async function main() {
         `[dry-run ${i + 1}/${items.length}] ${item.board} | ${item.company} | ${item.title}`,
       );
       console.log(`  url: ${item.url}`);
-      if (item.coverNote) console.log(`  note: ${item.coverNote}`);
+      if (item.matchScore !== undefined) console.log(`  score: ${item.matchScore}`);
+      printCopy(item);
     }
     console.log("Dry run complete — no browser launched.");
     return;
@@ -118,7 +125,7 @@ async function main() {
   const results: ApplyRunResult[] = [];
 
   console.log(
-    `\nBrowser profile: ${args.profile}\n首次使用请在打开的窗口中登录智联/猎聘/51job，登录态会保留。\n`,
+    `\nBrowser profile: ${args.profile}\n首次使用请在打开的窗口中登录智联/猎聘/51job/BOSS直聘，登录态会保留。\n只打开智联、猎聘、51job、BOSS 的 https 链接。\nBOSS 点「立即沟通」可能会立即发送平台默认招呼语，点击前会再确认。填入打招呼语不会按发送键。\n`,
   );
 
   let quit = false;
@@ -134,13 +141,17 @@ async function main() {
         continue;
       }
 
-      const hint = boardApplyHints[item.board];
+      const hint = boardApplyHints[item.board] ?? {
+        label: item.board,
+        selectors: [] as string[],
+      };
       console.log(
         `\n==== ${i + 1}/${items.length} ${hint.label} ====\n${item.company} · ${item.title}\n${item.url}`,
       );
-      if (item.coverNote) console.log(`建议附言: ${item.coverNote}`);
+      printCopy(item);
 
       try {
+        assertApplyTarget(item, "goto");
         await page.goto(item.url, {
           waitUntil: "domcontentloaded",
           timeout: 60000,
@@ -161,7 +172,7 @@ async function main() {
       while (!done) {
         const key = await prompt(
           rl,
-          "选择: [a]已投递  [c]尝试点击申请按钮  [s]跳过  [q]退出 > ",
+          "选择: [a]已投递  [c]尝试点击  [f]填入打招呼语  [p]复制打招呼语  [l]复制求职信  [s]跳过  [q]退出 > ",
         );
         if (key === "a" || key === "applied") {
           results.push({
@@ -194,9 +205,11 @@ async function main() {
             if ((await loc.count()) === 0) continue;
             const visible = await loc.isVisible().catch(() => false);
             if (!visible) continue;
+            const bossNotice =
+              item.board === "boss" ? "可能会立即发送平台默认招呼语。" : "";
             const confirm = await prompt(
               rl,
-              `检测到「${sel}」，确认点击？[y/N] > `,
+              `检测到「${sel}」。${bossNotice}确认点击？[y/N] > `,
             );
             if (confirm === "y" || confirm === "yes") {
               await loc.click({ timeout: 5000 }).catch((e: unknown) => {
@@ -210,8 +223,39 @@ async function main() {
             }
           }
           if (!clicked) {
-            console.log("未找到可点的申请按钮，请在浏览器中手动操作后按 a/s。");
+            console.log("未找到可点的申请/沟通按钮，请在浏览器中手动操作后按 a/s。");
           }
+        } else if (key === "p" || key === "l") {
+          const text = key === "p" ? item.greeting ?? item.coverNote : item.coverLetter;
+          if (!text) {
+            console.log(key === "p" ? "这个岗位没有打招呼语。" : "这个岗位没有求职信。");
+          } else {
+            const copied = copyToClipboard(text);
+            console.log(copied ? "已复制到剪贴板。脚本没有发送。" : "当前环境没有剪贴板工具，请从上面的文本手动复制。");
+          }
+        } else if (key === "f" || key === "fill") {
+          const text = item.greeting ?? item.coverNote;
+          if (!text) {
+            console.log("这个岗位没有打招呼语。");
+            continue;
+          }
+          try {
+            assertApplyTarget(item, "fill");
+          } catch (err) {
+            console.log(err instanceof Error ? err.message : String(err));
+            continue;
+          }
+          const confirm = await prompt(
+            rl,
+            "把打招呼语填进可见输入框？不会按发送键。[y/N] > ",
+          );
+          if (confirm !== "y" && confirm !== "yes") continue;
+          const filled = await fillGreeting(page, text);
+          console.log(
+            filled
+              ? `已填入（${filled}）。请你在页面上确认后再发送，然后按 a 或 s。`
+              : "没找到可见的输入框。可按 p 复制后手动粘贴。",
+          );
         } else {
           console.log("无效输入，请重试。");
         }
@@ -234,6 +278,51 @@ async function main() {
   console.log(
     "把该文件内容交给 botjob，或调用 mark_applied 回写会话状态。",
   );
+}
+
+function printCopy(item: ApplyPackItem) {
+  if (item.greeting) {
+    console.log("  打招呼语:");
+    console.log(item.greeting);
+  } else if (item.coverNote) {
+    console.log(`  附言: ${item.coverNote}`);
+  }
+  if (item.coverLetter) {
+    console.log("  求职信:");
+    console.log(item.coverLetter);
+  }
+}
+
+function copyToClipboard(text: string): boolean {
+  const commands: Array<{ cmd: string; args: string[] }> = [
+    { cmd: "xclip", args: ["-selection", "clipboard"] },
+    { cmd: "wl-copy", args: [] },
+    { cmd: "pbcopy", args: [] },
+  ];
+  for (const { cmd, args } of commands) {
+    const result = spawnSync(cmd, args, { input: text, encoding: "utf8" });
+    if (result.status === 0) return true;
+  }
+  return false;
+}
+
+async function fillGreeting(
+  page: { locator: (sel: string) => { last: () => { count: () => Promise<number>; isVisible: () => Promise<boolean>; fill: (text: string) => Promise<void> } } },
+  text: string,
+): Promise<string> {
+  for (const sel of ["textarea", "[contenteditable='true']"]) {
+    const loc = page.locator(sel).last();
+    if ((await loc.count()) === 0) continue;
+    const visible = await loc.isVisible().catch(() => false);
+    if (!visible) continue;
+    try {
+      await loc.fill(text);
+      return sel;
+    } catch (err) {
+      console.log(`填入失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return "";
 }
 
 main().catch((err) => {

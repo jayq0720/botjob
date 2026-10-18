@@ -1,0 +1,18 @@
+{
+  "code": 0,
+  "message": "Success",
+  "zpData": {
+    "jobList": [
+      {
+        "jobName": "资深前端工程师",
+        "brandName": "云桥网络",
+        "salaryDesc": "30-50K",
+        "cityName": "上海",
+        "jobExperience": "5-10年",
+        "jobDegree": "本科",
+        "encryptJobId": "abc123",
+        "postDescription": "负责核心前端架构，要求 React、TypeScript、工程化与性能优化。"
+      }
+    ]
+  }
+}

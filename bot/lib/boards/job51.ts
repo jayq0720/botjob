@@ -14,7 +14,7 @@ export function job51Search(criteria: SearchCriteria): BoardSearchPack {
     searchUrl,
     query,
     cityHint: city,
-    notes: "打开链接后请登录 51job 账号，确认城市与经验筛选后再批量投递。",
+    notes: "打开链接后请登录 51job。搜索页经常被 WAF 拦住；抓不到时请改贴 JD，不要绕过校验。",
   };
 }
 

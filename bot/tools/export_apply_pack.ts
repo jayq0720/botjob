@@ -67,8 +67,9 @@ export default defineTool({
       localCommand: `npm run apply:local -- --pack ${workspaceRel}`,
       nextSteps: [
         "在本机项目目录执行 localCommand（需已 npm install && npx playwright install chromium）",
-        "首次打开浏览器后，请手动登录智联/猎聘/51job；登录态会保存在 ~/.botjob/browser-profile",
-        "每个岗位页面：看完 JD 后按 a=已投递 / s=跳过 / c=尝试点击申请按钮(仍需确认) / q=退出",
+        "首次打开浏览器后，请手动登录智联/猎聘/51job/BOSS直聘；登录态会保存在 ~/.botjob/browser-profile",
+        "每个岗位会打印打招呼语和求职信。按 p 复制打招呼语，l 复制求职信，f 填进输入框（不发送）",
+        "按 a=已投递 / s=跳过 / c=尝试点击申请或立即沟通(仍需确认) / q=退出。BOSS 发送前必须再人工确认",
         "跑完后把 results JSON 告诉 agent，或调用 mark_applied 回写状态",
       ],
     };

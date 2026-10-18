@@ -1,4 +1,4 @@
-export type BoardId = "zhilian" | "liepin" | "job51";
+export type BoardId = "zhilian" | "liepin" | "job51" | "boss";
 
 export type SearchCriteria = {
   keywords: string[];
