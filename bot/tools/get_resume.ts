@@ -10,7 +10,7 @@ import {
 
 export default defineTool({
   description:
-    "Load the saved resume text, metadata, and structured profile for this session.",
+    "Load the saved resume text, metadata (incl. PDF pageCount/hasPdf), and structured profile for this session.",
   effect: "read",
   inputSchema: z.object({
     includeText: z

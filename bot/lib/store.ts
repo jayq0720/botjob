@@ -4,7 +4,9 @@ export type ResumeMeta = {
   filename: string;
   savedAt: string;
   charCount: number;
-  source: "paste" | "upload";
+  source: "paste" | "upload" | "pdf";
+  pageCount?: number;
+  hasPdf?: boolean;
 };
 
 export type ResumeProfile = {
@@ -46,6 +48,10 @@ export type ApplicationRecord = {
 
 export function resumeTextPath(sessionId: string): string {
   return `resumes/${sessionId}/resume.txt`;
+}
+
+export function resumePdfPath(sessionId: string): string {
+  return `resumes/${sessionId}/resume.pdf`;
 }
 
 export function resumeMetaKey(sessionId: string): string {

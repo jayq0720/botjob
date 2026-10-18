@@ -6,7 +6,7 @@
 
 | 步骤 | 说明 |
 | --- | --- |
-| 1. 上传简历 | 粘贴全文或上传文本；`save_resume` 写入会话存储 |
+| 1. 上传简历 | 粘贴全文、workspace 文件路径，或 PDF（`pdfBase64` / `.pdf` 路径）；`save_resume` 解析并写入会话存储 |
 | 2. 分析简历 | Agent 提炼目标岗位 / 技能 / 城市 / 关键词，`save_resume_profile` 落库 |
 | 3. 搜岗 | `search_jobs` 生成三站公开搜索深链 + 匹配候选（示例列表用于演示） |
 | 4. 投递 | `queue_apply` **需用户批准**；批准后给出投递链接，由用户登录站点完成提交 |
@@ -28,9 +28,14 @@ npx @cursor/bdk login          # 模型回合需要 Cursor 凭证
 npx @cursor/bdk validate --dir .
 npx @cursor/bdk info --dir . --json
 npx @cursor/bdk call save_resume --dir . --input '{"text":"...至少40字的简历...","filename":"me.txt"}'
+# PDF（base64）:
+# node -e "console.log(JSON.stringify({pdfBase64:require('fs').readFileSync('fixtures/sample-resume.pdf').toString('base64'),filename:'sample-resume.pdf'}))" \
+#   | xargs -0 -I{} npx @cursor/bdk call save_resume --dir . --input {}
 npx @cursor/bdk dev            # http://127.0.0.1:3000/playground
 npm run check
 ```
+
+仓库自带示例 PDF：`fixtures/sample-resume.pdf`。
 
 Playground 对话示例：
 

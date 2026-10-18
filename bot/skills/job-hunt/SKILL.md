@@ -13,8 +13,8 @@ User wants to upload a resume, find roles, or apply on Chinese job boards.
 
 ## Steps
 
-1. `save_resume` with full plain text.
-2. Analyze, then `save_resume_profile` (target titles, skills, cities, keywords).
+1. `save_resume` with plain `text`, or PDF via `pdfBase64` / `workspacePath` (`.pdf`).
+2. Analyze extracted text, then `save_resume_profile` (target titles, skills, cities, keywords).
 3. `search_jobs` — share `searchPacks[].searchUrl` for 智联 / 猎聘 / 51job.
 4. User picks roles → `queue_apply` (approval required).
 5. After approval, give apply URLs; user finishes login + submit in browser.
