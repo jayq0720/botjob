@@ -3,14 +3,19 @@
   "private": true,
   "type": "module",
   "description": "Resume analyze, JD scoring, and semi-auto apply for 智联/猎聘/51job/BOSS",
+  "bin": {
+    "botjob-mcp": "./bin/botjob-mcp.js"
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "dev": "bdk dev",
+    "mcp": "tsx mcp/stdio.ts",
     "apply:local": "tsx scripts/local-apply.ts"
   },
   "dependencies": {
     "@cursor/bdk": "^0.2.27",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@tesseract.js-data/chi_sim": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "pdf-parse": "^2.4.5",

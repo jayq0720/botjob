@@ -1,13 +1,14 @@
-import type { ToolContext } from "@cursor/bdk/tools";
 import {
   resumeMetaKey,
   resumePdfPath,
   resumeTextPath,
   type ResumeMeta,
 } from "./store.js";
+import type { StateStore } from "./state-store.js";
 
 export async function persistResumeText(
-  ctx: ToolContext,
+  store: StateStore,
+  sessionId: string,
   args: {
     text: string;
     filename: string;
@@ -17,12 +18,10 @@ export async function persistResumeText(
     ocr?: boolean;
   },
 ): Promise<{ saved: true; filename: string; charCount: number; pageCount?: number; ocr?: boolean }> {
-  const sessionId = ctx.session.id;
   const cleaned = args.text.replace(/\r\n/g, "\n").trim();
-  const files = ctx.host.files.forSession(sessionId);
-  await files.write(resumeTextPath(sessionId), cleaned);
+  await store.writeBytes(resumeTextPath(sessionId), cleaned);
   if (args.pdfBytes) {
-    await files.write(resumePdfPath(sessionId), args.pdfBytes);
+    await store.writeBytes(resumePdfPath(sessionId), args.pdfBytes);
   }
   const meta: ResumeMeta = {
     filename: args.filename,
@@ -33,7 +32,7 @@ export async function persistResumeText(
     hasPdf: Boolean(args.pdfBytes),
     ocr: args.ocr,
   };
-  await ctx.host.kv.put(resumeMetaKey(sessionId), meta);
+  await store.put(resumeMetaKey(sessionId), meta);
   return {
     saved: true,
     filename: meta.filename,

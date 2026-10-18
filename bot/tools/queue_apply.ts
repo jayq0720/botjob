@@ -1,18 +1,8 @@
 import { defineTool } from "@cursor/bdk/tools";
 import * as z from "zod/v4";
+import { queueApply } from "../lib/actions.js";
+import { actionContextFromTool } from "../lib/bdk-context.js";
 import { jobUrlAllowed } from "../lib/jd.js";
-import { letterFor } from "../lib/job-state.js";
-import { scoreJob } from "../lib/score.js";
-import {
-  applicationsKey,
-  coverLettersKey,
-  resumeProfileKey,
-  scoredJobsKey,
-  type ApplicationRecord,
-  type CoverLetterRecord,
-  type JobListing,
-  type ResumeProfile,
-} from "../lib/store.js";
 
 export const queueJobSchema = z
   .object({
@@ -52,79 +42,7 @@ export default defineTool({
     dryRun: true,
     count: jobs.length,
   }),
-  async execute({ jobs, coverNote }, ctx) {
-    const sessionId = ctx.session.id;
-    const now = new Date().toISOString();
-    const existing =
-      ((await ctx.host.kv.get(applicationsKey(sessionId))) as
-        | ApplicationRecord[]
-        | undefined) ?? [];
-    const scored =
-      ((await ctx.host.kv.get(scoredJobsKey(sessionId))) as
-        | JobListing[]
-        | undefined) ?? [];
-    const letters =
-      ((await ctx.host.kv.get(coverLettersKey(sessionId))) as
-        | CoverLetterRecord[]
-        | undefined) ?? [];
-    const profile = (await ctx.host.kv.get(resumeProfileKey(sessionId))) as
-      | ResumeProfile
-      | undefined;
-
-    const records: ApplicationRecord[] = jobs.map((job, index) => {
-      const prev = scored.find((item) => item.id === job.id || item.url === job.url);
-      const merged: JobListing = {
-        ...prev,
-        ...job,
-        description: job.description ?? prev?.description,
-        experience: job.experience ?? prev?.experience,
-        education: job.education ?? prev?.education,
-        salary: job.salary ?? prev?.salary,
-        score: prev?.score,
-      };
-      if (profile) {
-        const breakdown = scoreJob(profile, merged);
-        merged.score = breakdown;
-        merged.matchScore = breakdown.total;
-        merged.matchReason = breakdown.summary;
-      }
-      const letter = letterFor(letters, merged.id);
-      return {
-        id: `app-${job.board}-${job.id}-${Date.now()}-${index}`,
-        job: merged,
-        status: "approved",
-        coverNote: letter?.greeting ?? coverNote,
-        greeting: letter?.greeting ?? coverNote,
-        coverLetter: letter?.coverLetter,
-        createdAt: now,
-        updatedAt: now,
-      };
-    });
-
-    const merged = [...existing, ...records];
-    await ctx.host.kv.put(applicationsKey(sessionId), merged);
-
-    return {
-      approved: true,
-      count: records.length,
-      applications: records.map((r) => ({
-        id: r.id,
-        board: r.job.board,
-        title: r.job.title,
-        company: r.job.company,
-        applyUrl: r.job.url,
-        status: r.status,
-        matchScore: r.job.matchScore,
-        score: r.job.score,
-        greeting: r.greeting,
-        coverLetter: r.coverLetter,
-      })),
-      nextSteps: [
-        "调用 export_apply_pack 导出投递包",
-        "本机执行 npm run apply:local -- --pack <workspacePath>（持久化浏览器配置 ~/.botjob/browser-profile）",
-        "每个岗位由用户确认后投递；跑完用 mark_applied 回写状态",
-      ],
-      note: "半自动投递：本机 Playwright 打开页面，登录态保留在用户本机配置目录；每次点击/标记需用户确认。",
-    };
+  async execute(input, ctx) {
+    return queueApply(actionContextFromTool(ctx), input);
   },
 });

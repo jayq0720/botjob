@@ -1,6 +1,7 @@
 import { defineTool } from "@cursor/bdk/tools";
 import * as z from "zod/v4";
-import { resumeProfileKey, type ResumeProfile } from "../lib/store.js";
+import { saveResumeProfile } from "../lib/actions.js";
+import { actionContextFromTool } from "../lib/bdk-context.js";
 
 export default defineTool({
   description:
@@ -30,28 +31,6 @@ export default defineTool({
     targetTitles,
   }),
   async execute(input, ctx) {
-    const sessionId = ctx.session.id;
-    const profile: ResumeProfile = {
-      name: input.name,
-      summary: input.summary,
-      yearsExperience: input.yearsExperience,
-      education: input.education,
-      currentTitle: input.currentTitle,
-      targetTitles: input.targetTitles,
-      skills: input.skills,
-      cities: input.cities ?? [],
-      industries: input.industries ?? [],
-      salaryExpectation: input.salaryExpectation,
-      strengths: input.strengths ?? [],
-      gaps: input.gaps ?? [],
-      keywords: input.keywords,
-      updatedAt: new Date().toISOString(),
-    };
-    await ctx.host.kv.put(resumeProfileKey(sessionId), profile);
-    return {
-      saved: true,
-      profile,
-      next: "Call search_jobs for 智联/猎聘/51job/BOSS，或把 JD 文本 / 岗位 URL 交给 score_job。",
-    };
+    return saveResumeProfile(actionContextFromTool(ctx), input);
   },
 });
