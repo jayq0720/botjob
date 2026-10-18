@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { applyPackPath, applicationsToPack } from "./apply-pack.js";
 import { fetchBoard, fetchJobUrl } from "./boards/fetch.js";
 import {
@@ -129,6 +130,16 @@ export async function saveResume(ctx: ActionContext, input: SaveResumeInput) {
   };
 }
 
+/** Repo root. `bot/lib/actions.ts` lives two directories below it. */
+export function projectRoot(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
+function isInside(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
 async function loadResumeFile(
   ctx: ActionContext,
   input: { workspacePath?: string; filePath?: string },
@@ -139,16 +150,53 @@ async function loadResumeFile(
     }
     return readLocalResumeFile(input.filePath);
   }
-  const rel = input.workspacePath!.replace(/^\/+/, "");
-  if (rel.includes("..") || path.isAbsolute(rel)) {
+  return readWorkspaceResume(ctx.workspaceDir, input.workspacePath!);
+}
+
+/**
+ * Relative workspacePath: session workspace first, then the project root.
+ * Same extension, magic, hidden-path, and size checks as an MCP filePath.
+ */
+async function readWorkspaceResume(
+  workspaceDir: string,
+  raw: string,
+): Promise<{ bytes: Uint8Array; filename: string; relHint: string; kind: LocalResumeKind }> {
+  if (raw.includes("\0") || path.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
     throw new Error("workspacePath must be a relative path without ..");
   }
-  const abs = path.join(ctx.workspaceDir, rel);
-  return {
-    bytes: new Uint8Array(await readFile(abs)),
-    filename: path.basename(rel),
-    relHint: rel,
-  };
+  const parts = raw.split(/[\\/]/).filter((part) => part.length > 0 && part !== ".");
+  if (parts.length === 0 || parts.some((part) => part === "..")) {
+    throw new Error("workspacePath must be a relative path without ..");
+  }
+  if (parts.some((part) => part.startsWith("."))) {
+    throw new Error("不读取隐藏文件或隐藏目录");
+  }
+  const rel = parts.join(path.sep);
+  const roots = [...new Set([path.resolve(workspaceDir), projectRoot()])];
+  for (const root of roots) {
+    const abs = path.resolve(root, rel);
+    if (!isInside(root, abs)) {
+      throw new Error("workspacePath 必须位于会话工作区或项目根目录内");
+    }
+    let real: string;
+    try {
+      real = await realpath(abs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    let rootReal = root;
+    try {
+      rootReal = await realpath(root);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    if (!isInside(rootReal, real)) {
+      throw new Error("workspacePath 必须位于会话工作区或项目根目录内");
+    }
+    return readLocalResumeFile(real, rootReal);
+  }
+  throw new Error("找不到简历文件");
 }
 
 function hasHiddenSegment(absPath: string): boolean {
@@ -186,6 +234,7 @@ function assertLocalResumeBytes(kind: LocalResumeKind, bytes: Uint8Array): void 
 /** Absolute MCP resume path: extension, magic bytes, size, and no hidden path or symlink target. */
 async function readLocalResumeFile(
   filePath: string,
+  root?: string,
 ): Promise<{ bytes: Uint8Array; filename: string; relHint: string; kind: LocalResumeKind }> {
   if (filePath.includes("\0")) throw new Error("非法路径");
   const abs = path.resolve(filePath);
@@ -198,6 +247,9 @@ async function readLocalResumeFile(
     throw err;
   }
   if (hasHiddenSegment(real)) throw new Error("不读取隐藏文件或隐藏目录");
+  if (root && !isInside(root, real)) {
+    throw new Error("workspacePath 必须位于会话工作区或项目根目录内");
+  }
   const kind = kindForExtension(path.extname(real).toLowerCase());
   if (!kind || !LOCAL_RESUME_EXT.has(path.extname(real).toLowerCase())) {
     throw new Error("只接受 .pdf、.png、.jpg、.jpeg、.txt 简历");
@@ -847,7 +899,9 @@ export async function queueApply(
       "只有已批准的岗位才能 export_apply_pack。不要打开浏览器。",
     ],
     note: [
-      "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。",
+      ctx.allowAbsoluteResumePath
+        ? "MCP 没有 BDK 审批卡片。queue_apply 不会把申请标成已批准，也不会打开浏览器。"
+        : "这次没有用户批准。bdk call、dry-run 和直接的 HTTP 调用不会把申请标成 approved。请在 Playground 的审批卡片上批准。",
       reusedNote,
     ]
       .filter(Boolean)

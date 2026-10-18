@@ -2,7 +2,7 @@ import type { BoardId, SearchCriteria } from "./types.js";
 import { bossCityCode, bossSearch } from "./boss.js";
 import { job51Search } from "./job51.js";
 import { liepinSearch } from "./liepin.js";
-import { zhilianSearch } from "./zhilian.js";
+import { filterZhilianListings, ZHILIAN_CITY_ID, zhilianSearch } from "./zhilian.js";
 import { allowedJobUrl, type JobPosting } from "../jd.js";
 import {
   parseBossApi,
@@ -39,17 +39,11 @@ const MAX_REDIRECTS = 5;
 /** Same cap the old buffered read used, in decimal bytes. */
 const MAX_BODY_BYTES = 2_000_000;
 
-const ZHILIAN_CITY_ID: Record<string, string> = {
-  北京: "530",
-  上海: "538",
-  广州: "763",
-  深圳: "765",
-  杭州: "653",
-  成都: "801",
-  南京: "635",
-  武汉: "736",
-  西安: "854",
-};
+export const JOB51_RISK_MESSAGE =
+  "前程无忧被风控拦截（阿里云 WAF）。请用本机浏览器打开搜索链接。不会代为通过验证或绕过校验。";
+
+export const BOSS_RISK_MESSAGE =
+  "BOSS直聘被风控拦截（环境异常或 IP 异常）。请用本机浏览器打开搜索链接。不会代为通过校验。";
 
 export function classifyFetch(input: {
   status: number;
@@ -76,7 +70,7 @@ export function classifyFetch(input: {
     return {
       blocked: true,
       reason: "blocked",
-      message: "跳转到安全校验页。不会代为通过校验或登录。",
+      message: /zhipin\.com/i.test(url) ? BOSS_RISK_MESSAGE : "跳转到安全校验页。不会代为通过校验或登录。",
     };
   }
   if (
@@ -87,14 +81,16 @@ export function classifyFetch(input: {
     return {
       blocked: true,
       reason: "captcha",
-      message: "页面要求人机验证或验证码。不会代为勾选或绕过。",
+      message: /aliyun_waf|aliyunCaptcha/i.test(body)
+        ? JOB51_RISK_MESSAGE
+        : "页面要求人机验证或验证码。不会代为勾选或绕过。",
     };
   }
   if (/您的环境存在异常|访问行为异常|环境异常/.test(body)) {
     return {
       blocked: true,
       reason: "blocked",
-      message: "站点返回环境异常，公开抓取被拦截。",
+      message: /zhipin\.com/i.test(url) ? BOSS_RISK_MESSAGE : "站点返回环境异常，公开抓取被拦截。请用本机浏览器打开。",
     };
   }
   if (/\/login|passport/i.test(url) && /登录/.test(body)) {
@@ -212,6 +208,17 @@ export async function fetchText(url: string): Promise<Fetched | { error: string 
   }
 }
 
+/** 51job 反爬空壳（没有职位卡片）。不尝试通过校验。 */
+export function riskShellMessage(
+  board: BoardId,
+  body: string,
+): { reason: FetchReason; message: string } | undefined {
+  if (board === "job51" && /interfaceacting\.js|antidom\.js/i.test(body)) {
+    return { reason: "blocked", message: JOB51_RISK_MESSAGE };
+  }
+  return undefined;
+}
+
 function searchPack(board: BoardId, criteria: SearchCriteria) {
   switch (board) {
     case "zhilian":
@@ -257,9 +264,27 @@ export async function fetchBoard(
     if (api.ok) listings = api.jobs;
     else apiFailure = { reason: api.reason, message: api.message };
   }
+  const parsedCount = listings.length;
+  if (board === "zhilian" && listings.length > 0) {
+    listings = filterZhilianListings(listings, criteria);
+  }
   if (listings.length === 0) {
     if (gate.blocked) {
       return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [] };
+    }
+    if (parsedCount > 0 && board === "zhilian") {
+      return {
+        board,
+        ok: false,
+        reason: "empty",
+        message: "公开结果里没有同时符合城市和关键词的岗位。",
+        listings: [],
+        detailErrors: [],
+      };
+    }
+    const shell = riskShellMessage(board, fetched.body);
+    if (shell) {
+      return { board, ok: false, reason: shell.reason, message: shell.message, listings: [], detailErrors: [] };
     }
     if (
       apiFailure?.reason === "empty" &&

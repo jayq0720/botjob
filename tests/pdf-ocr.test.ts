@@ -55,17 +55,28 @@ test("text-layer PDF extracts 张三 without OCR", async () => {
 });
 
 test("scanned PDF and png OCR Chinese", async () => {
-  const pdf = await extractTextFromPdf(read("sample-resume-scan.pdf"));
-  assert.equal(pdf.ocr, true);
-  assert.match(pdf.text, /李明/);
-  assert.match(pdf.text, /后端/);
-  console.log("sample-resume-scan.pdf preview:\n" + pdf.text.slice(0, 400));
+  const stderr: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    stderr.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return original(chunk as never, ...(rest as never[]));
+  }) as typeof process.stderr.write;
+  try {
+    const pdf = await extractTextFromPdf(read("sample-resume-scan.pdf"));
+    assert.equal(pdf.ocr, true);
+    assert.match(pdf.text, /李明/);
+    assert.match(pdf.text, /后端/);
+    console.log("sample-resume-scan.pdf preview:\n" + pdf.text.slice(0, 400));
 
-  const { ocrImage, assertOcrText } = await import("../bot/lib/ocr.js");
-  const imageText = assertOcrText(await ocrImage(read("sample-resume-scan.png")));
-  assert.match(imageText, /李明/);
-  assert.match(imageText, /上海/);
-  console.log("sample-resume-scan.png preview:\n" + imageText.slice(0, 400));
+    const { ocrImage, assertOcrText } = await import("../bot/lib/ocr.js");
+    const imageText = assertOcrText(await ocrImage(read("sample-resume-scan.png")));
+    assert.match(imageText, /李明/);
+    assert.match(imageText, /上海/);
+    console.log("sample-resume-scan.png preview:\n" + imageText.slice(0, 400));
+  } finally {
+    process.stderr.write = original;
+  }
+  assert.equal(stderr.join("").includes("Failed loading language"), false);
 });
 
 test("OCR page cap and byte cap fail clearly", async () => {

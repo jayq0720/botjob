@@ -460,9 +460,8 @@ export function parseBossApi(payload: unknown): ApiParse {
     return {
       ok: false,
       reason: "blocked",
-      message: message
-        ? `BOSS 接口拒绝公开读取：${message} 不会代为通过安全校验。`
-        : "BOSS 接口拒绝公开读取。不会代为通过安全校验。",
+      message:
+        "BOSS直聘被风控拦截（环境异常或 IP 异常）。请用本机浏览器打开搜索链接。不会代为通过校验。",
     };
   }
   if (code !== 0) {

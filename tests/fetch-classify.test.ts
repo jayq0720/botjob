@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { classifyFetch } from "../bot/lib/boards/fetch.js";
+import {
+  BOSS_RISK_MESSAGE,
+  classifyFetch,
+  JOB51_RISK_MESSAGE,
+  riskShellMessage,
+} from "../bot/lib/boards/fetch.js";
 
 function read(name: string): string {
   return readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
@@ -22,7 +27,22 @@ test("recorded block pages classify without fetching", () => {
     body: read("blocked/job51-waf.html"),
   });
   assert.equal(job51.blocked, true);
-  if (job51.blocked) assert.equal(job51.reason, "captcha");
+  if (job51.blocked) {
+    assert.equal(job51.reason, "captcha");
+    assert.equal(job51.message, JOB51_RISK_MESSAGE);
+  }
+
+  const shell = read("blocked/job51-shell.html");
+  const shellGate = classifyFetch({
+    status: 200,
+    finalUrl: "https://we.51job.com/pc/search?keyword=frontend",
+    body: shell,
+  });
+  assert.equal(shellGate.blocked, false);
+  assert.deepEqual(riskShellMessage("job51", shell), {
+    reason: "blocked",
+    message: JOB51_RISK_MESSAGE,
+  });
 
   const boss = classifyFetch({
     status: 200,
@@ -30,5 +50,8 @@ test("recorded block pages classify without fetching", () => {
     body: '<html><head><title>请稍候 - BOSS直聘</title></head><body><div class="page-security"></div></body></html>',
   });
   assert.equal(boss.blocked, true);
-  if (boss.blocked) assert.equal(boss.reason, "blocked");
+  if (boss.blocked) {
+    assert.equal(boss.reason, "blocked");
+    assert.equal(boss.message, BOSS_RISK_MESSAGE);
+  }
 });

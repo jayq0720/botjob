@@ -8,12 +8,13 @@
  *   npm run apply:local -- --pack apply-packs/pack-….json
  *   npm run apply:local -- --pack fixtures/sample-apply-pack.json --dry-run
  */
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { homedir } from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   assertApplyTarget,
   boardApplyHints,
@@ -74,9 +75,76 @@ Keys per job (headed mode):
 `);
 }
 
-async function prompt(rl: ReturnType<typeof createInterface>, q: string) {
-  const ans = (await rl.question(q)).trim().toLowerCase();
-  return ans;
+export function isReadlineClosed(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "ERR_USE_AFTER_CLOSE"
+  );
+}
+
+function readlineClosed(rl: Interface): boolean {
+  return (rl as Interface & { closed?: boolean }).closed === true;
+}
+
+export type KeyQueue = { lines: string[]; ended: boolean };
+
+/** Keep lines that arrive before the first prompt (piped `q` during browser launch). */
+export function armReadline(rl: Interface): KeyQueue {
+  const queue: KeyQueue = { lines: [], ended: false };
+  rl.on("line", (line) => {
+    queue.lines.push(line);
+  });
+  rl.on("close", () => {
+    queue.ended = true;
+  });
+  return queue;
+}
+
+/** `null` means stdin already closed. Callers mark the current job and the rest skipped. */
+export async function askOrQuit(
+  rl: Interface,
+  q: string,
+  queue?: KeyQueue,
+): Promise<string | null> {
+  if (queue && queue.lines.length > 0) {
+    return queue.lines.shift()!.trim().toLowerCase();
+  }
+  if ((queue?.ended ?? false) || readlineClosed(rl)) return null;
+  try {
+    const ans = (await rl.question(q)).trim().toLowerCase();
+    if (queue && queue.lines[0]?.trim().toLowerCase() === ans) queue.lines.shift();
+    return ans;
+  } catch (err) {
+    if (isReadlineClosed(err)) return null;
+    throw err;
+  }
+}
+
+export function safeCloseReadline(rl: Interface): void {
+  if (readlineClosed(rl)) return;
+  try {
+    rl.close();
+  } catch (err) {
+    if (!isReadlineClosed(err)) throw err;
+  }
+}
+
+/** Jobs from `fromIndex` onward (and any not yet recorded) become skipped. */
+export function planAfterClosedStdin(
+  items: { id: string }[],
+  answered: ApplyRunResult[],
+  fromIndex: number,
+  at = new Date().toISOString(),
+): ApplyRunResult[] {
+  const out = [...answered];
+  for (let i = fromIndex; i < items.length; i++) {
+    const id = items[i]!.id;
+    if (out.some((row) => row.id === id)) continue;
+    out.push({ id, outcome: "skipped", note: "stdin closed", at });
+  }
+  return out;
 }
 
 async function main() {
@@ -114,6 +182,9 @@ async function main() {
     process.exit(1);
   }
 
+  // Attach before the browser launches so a piped line is not dropped when stdin EOFs.
+  const rl = createInterface({ input, output });
+  const keys = armReadline(rl);
   await mkdir(args.profile, { recursive: true });
   const context = await chromium.launchPersistentContext(args.profile, {
     headless: !args.headed,
@@ -121,7 +192,6 @@ async function main() {
     locale: "zh-CN",
   });
   const page = context.pages()[0] ?? (await context.newPage());
-  const rl = createInterface({ input, output });
   const results: ApplyRunResult[] = [];
 
   console.log(
@@ -129,8 +199,10 @@ async function main() {
   );
 
   let quit = false;
+  let closedStdin = false;
   try {
     for (const [i, item] of items.entries()) {
+      if (closedStdin) break;
       if (quit) {
         results.push({
           id: item.id,
@@ -139,6 +211,11 @@ async function main() {
           at: new Date().toISOString(),
         });
         continue;
+      }
+      if (keys.lines.length === 0 && (keys.ended || readlineClosed(rl))) {
+        const skipped = planAfterClosedStdin(items, results, i);
+        results.splice(0, results.length, ...skipped);
+        break;
       }
 
       const hint = boardApplyHints[item.board] ?? {
@@ -170,10 +247,17 @@ async function main() {
 
       let done = false;
       while (!done) {
-        const key = await prompt(
+        const key = await askOrQuit(
           rl,
           "选择: [a]已投递  [c]尝试点击  [f]填入打招呼语  [p]复制打招呼语  [l]复制求职信  [s]跳过  [q]退出 > ",
+          keys,
         );
+        if (key === null) {
+          const skipped = planAfterClosedStdin(items, results, i);
+          results.splice(0, results.length, ...skipped);
+          closedStdin = true;
+          break;
+        }
         if (key === "a" || key === "applied") {
           results.push({
             id: item.id,
@@ -207,10 +291,18 @@ async function main() {
             if (!visible) continue;
             const bossNotice =
               item.board === "boss" ? "可能会立即发送平台默认招呼语。" : "";
-            const confirm = await prompt(
+            const confirm = await askOrQuit(
               rl,
               `检测到「${sel}」。${bossNotice}确认点击？[y/N] > `,
+              keys,
             );
+            if (confirm === null) {
+              const skipped = planAfterClosedStdin(items, results, i);
+              results.splice(0, results.length, ...skipped);
+              closedStdin = true;
+              done = true;
+              break;
+            }
             if (confirm === "y" || confirm === "yes") {
               await loc.click({ timeout: 5000 }).catch((e: unknown) => {
                 console.log(`点击失败: ${e}`);
@@ -245,10 +337,18 @@ async function main() {
             console.log(err instanceof Error ? err.message : String(err));
             continue;
           }
-          const confirm = await prompt(
+          const confirm = await askOrQuit(
             rl,
             "把打招呼语填进可见输入框？不会按发送键。[y/N] > ",
+            keys,
           );
+          if (confirm === null) {
+            const skipped = planAfterClosedStdin(items, results, i);
+            results.splice(0, results.length, ...skipped);
+            closedStdin = true;
+            done = true;
+            break;
+          }
           if (confirm !== "y" && confirm !== "yes") continue;
           const filled = await fillGreeting(page, text);
           console.log(
@@ -260,24 +360,26 @@ async function main() {
           console.log("无效输入，请重试。");
         }
       }
+      if (closedStdin) break;
     }
   } finally {
-    rl.close();
-    await context.close();
+    safeCloseReadline(rl);
+    await context.close().catch((err: unknown) => {
+      console.error(err);
+    });
+    const report: ApplyRunReport = {
+      version: 1,
+      packExportedAt: pack.exportedAt,
+      finishedAt: new Date().toISOString(),
+      results,
+    };
+    const outPath = packAbs.replace(/\.json$/i, "") + ".results.json";
+    await writeFile(outPath, JSON.stringify(report, null, 2), "utf8");
+    console.log(`\nWrote results → ${outPath}`);
+    console.log(
+      "把该文件内容交给 botjob，或调用 mark_applied 回写会话状态。",
+    );
   }
-
-  const report: ApplyRunReport = {
-    version: 1,
-    packExportedAt: pack.exportedAt,
-    finishedAt: new Date().toISOString(),
-    results,
-  };
-  const outPath = packAbs.replace(/\.json$/i, "") + ".results.json";
-  await writeFile(outPath, JSON.stringify(report, null, 2), "utf8");
-  console.log(`\nWrote results → ${outPath}`);
-  console.log(
-    "把该文件内容交给 botjob，或调用 mark_applied 回写会话状态。",
-  );
 }
 
 function printCopy(item: ApplyPackItem) {
@@ -325,7 +427,15 @@ async function fillGreeting(
   return "";
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function invokedDirectly(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+}
+
+if (invokedDirectly()) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

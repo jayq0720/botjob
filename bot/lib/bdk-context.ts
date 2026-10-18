@@ -1,3 +1,4 @@
+import { DIRECT_TOOL_CALL_CHANNEL_ID } from "@cursor/bdk";
 import type { ToolContext } from "@cursor/bdk/tools";
 import type { ActionContext, StateStore } from "./state-store.js";
 
@@ -22,7 +23,11 @@ export function actionContextFromTool(ctx: ToolContext): ActionContext {
     store: storeFromTool(ctx),
     workspaceDir: ctx.workspaceDir,
     offline: ctx.session.purpose === "eval" || ctx.session.dryRun === true,
-    queueStatus: "approved",
+    // Direct `bdk call` and POST /v1/tools skip the approval card and leave
+    // `approvedBy` unset. Only a parked model-turn approval sets it.
+    queueStatus:
+      ctx.approvedBy && ctx.session.dryRun !== true ? "approved" : "queued",
+    durableSession: ctx.session.channelId !== DIRECT_TOOL_CALL_CHANNEL_ID,
     allowAbsoluteResumePath: false,
     absolutePackCommand: false,
     exportOnlyApproved: false,
@@ -45,4 +50,13 @@ function storeFromTool(ctx: ToolContext): StateStore {
     readText: (relPath) => files.read(relPath),
     writeBytes: (relPath, data) => files.write(relPath, data),
   };
+}
+
+/** Scratch `bdk call` has no reusable session. Durable sessions echo `sessionId`. */
+export function withDurableSession<T extends object>(
+  ctx: ActionContext,
+  result: T,
+): T & { sessionId?: string } {
+  if (!ctx.durableSession) return result;
+  return { ...result, sessionId: ctx.sessionId };
 }
