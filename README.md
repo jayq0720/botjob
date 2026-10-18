@@ -82,6 +82,110 @@ Playground 对话示例：
 
 > 下面是我的简历，请分析并在智联、猎聘、51job、BOSS 帮我找前端岗位。这是 JD：…
 
+## 在 AI 工具里使用
+
+stdio MCP 服务器把上面的工具暴露给 Claude Code、Codex CLI、Cursor、Claude Desktop，以及任何支持本地 stdio MCP 的客户端。只做本机进程，没有远程 HTTP。打招呼语和求职信仍由客户端里的模型来写，服务器只保存。
+
+先在仓库里安装依赖。客户端要启动的是 `node bin/botjob-mcp.js`（或在本仓库里 `npx botjob-mcp`）。不要把 `npm run mcp` 配进客户端：npm 会往 stdout 打一行脚本名，stdio 协议会坏。`npm run mcp` 只适合你自己在终端里看它是否卡住等待输入。
+
+状态在 `~/.botjob/data/`（`kv.json` 和简历文件）。设置 `BOTJOB_HOME` 可以改掉 `~/.botjob` 这一层。浏览器登录态仍是 `~/.botjob/browser-profile`，跟数据目录分开。
+
+MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模型必须先请你看岗位、链接和话术；`approve_apply` 会再用 MCP elicitation 弹一次确认。客户端不支持 elicitation 时，只有你已经同意，模型才可以传 `confirm: true`。没批准的岗位不能 `export_apply_pack`。服务器不打开浏览器。你拿到 `localCommand` 后，自己在仓库里跑 `npm run apply:local`，逐条确认。
+
+服务器启动时会把 `bot/skills/job-hunt` 的流程和写作规范做成 prompt `job-hunt`，以及 resource `botjob://skills/job-hunt`。给 Claude Code / Codex 用的同一份说明在 `skills/botjob/SKILL.md`。
+
+下面的路径请换成这台机器上的仓库绝对路径。配置格式来自各工具当前文档：Claude Code 的 [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)，Codex 的 [Model Context Protocol](https://learn.chatgpt.com/docs/extend/mcp)，Cursor 的 [MCP](https://cursor.com/docs/mcp)。
+
+### Claude Code
+
+```bash
+claude mcp add --transport stdio --scope project botjob -- node /绝对路径/botjob/bin/botjob-mcp.js
+claude mcp list
+```
+
+`--` 后面整段是服务器命令，不要漏。项目级配置写在仓库根的 `.mcp.json`（Claude Code 会请你批准后才启动）：
+
+```json
+{
+  "mcpServers": {
+    "botjob": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/bin/botjob-mcp.js"]
+    }
+  }
+}
+```
+
+会话里用 `/mcp` 看工具列表。求职流程 skill 可链到 Claude Code 的项目技能目录：
+
+```bash
+mkdir -p .claude/skills
+ln -s ../../skills/botjob .claude/skills/botjob
+```
+
+### Codex CLI
+
+Codex 把 MCP 配在 `~/.codex/config.toml`（项目级是受信任仓库里的 `.codex/config.toml`）。CLI 和 Codex 桌面端共用这份配置。
+
+```bash
+codex mcp add botjob -- node /绝对路径/botjob/bin/botjob-mcp.js
+codex mcp list
+```
+
+手写时：
+
+```toml
+[mcp_servers.botjob]
+command = "node"
+args = ["/绝对路径/botjob/bin/botjob-mcp.js"]
+
+[mcp_servers.botjob.env]
+BOTJOB_HOME = "/绝对路径/.botjob"
+```
+
+技能目录是仓库里的 `.agents/skills`（或 `~/.codex/skills`）：
+
+```bash
+mkdir -p .agents/skills
+ln -s ../../skills/botjob .agents/skills/botjob
+```
+
+### Cursor
+
+项目配置是 `.cursor/mcp.json`，全局是 `~/.cursor/mcp.json`。stdio 需要 `command`，官方字段表把 `type` 标成必填。
+
+```json
+{
+  "mcpServers": {
+    "botjob": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/bin/botjob-mcp.js"]
+    }
+  }
+}
+```
+
+保存后在 Cursor Settings → MCP 里刷新，确认 botjob 已连接并列出工具。
+
+### Claude Desktop 和其他 stdio 客户端
+
+Claude Desktop 的配置文件：macOS 是 `~/Library/Application Support/Claude/claude_desktop_config.json`，Windows 是 `%APPDATA%\Claude\claude_desktop_config.json`。改完要完全退出再打开。
+
+```json
+{
+  "mcpServers": {
+    "botjob": {
+      "command": "node",
+      "args": ["/绝对路径/botjob/bin/botjob-mcp.js"]
+    }
+  }
+}
+```
+
+其他只支持 stdio 的客户端用同一组 `command` / `args`。服务器声明的工具说明、`readOnlyHint` / `destructiveHint`，以及 prompt `job-hunt`，会在 `tools/list` 和 `prompts/list` 里出现。
+
 ## 工具一览
 
 - `save_resume` / `get_resume` / `save_resume_profile`
