@@ -1,18 +1,25 @@
 /** Session-scoped keys for resume + application state in host.kv / host.files. */
 
+import type { ScoreBreakdown } from "./score.js";
+import type { BoardId as Board } from "./boards/types.js";
+
+export type BoardId = Board;
+
 export type ResumeMeta = {
   filename: string;
   savedAt: string;
   charCount: number;
-  source: "paste" | "upload" | "pdf";
+  source: "paste" | "upload" | "pdf" | "image";
   pageCount?: number;
   hasPdf?: boolean;
+  ocr?: boolean;
 };
 
 export type ResumeProfile = {
   name?: string;
   summary: string;
   yearsExperience?: number;
+  education?: string;
   currentTitle?: string;
   targetTitles: string[];
   skills: string[];
@@ -25,16 +32,23 @@ export type ResumeProfile = {
   updatedAt: string;
 };
 
+export type JdStatus = "detail" | "list_only" | "pasted";
+
 export type JobListing = {
   id: string;
-  board: "zhilian" | "liepin" | "job51";
+  board: BoardId;
   title: string;
   company: string;
   city: string;
   salary?: string;
+  experience?: string;
+  education?: string;
+  description?: string;
   url: string;
+  jdStatus?: JdStatus;
   matchReason: string;
   matchScore: number;
+  score?: ScoreBreakdown;
 };
 
 export type ApplicationRecord = {
@@ -48,9 +62,18 @@ export type ApplicationRecord = {
     | "skipped"
     | "failed";
   coverNote?: string;
+  greeting?: string;
+  coverLetter?: string;
   createdAt: string;
   updatedAt: string;
   lastNote?: string;
+};
+
+export type CoverLetterRecord = {
+  jobId: string;
+  greeting: string;
+  coverLetter: string;
+  updatedAt: string;
 };
 
 export function resumeTextPath(sessionId: string): string {
@@ -71,4 +94,12 @@ export function resumeProfileKey(sessionId: string): string {
 
 export function applicationsKey(sessionId: string): string {
   return `apps:${sessionId}`;
+}
+
+export function scoredJobsKey(sessionId: string): string {
+  return `jobs:${sessionId}:scored`;
+}
+
+export function coverLettersKey(sessionId: string): string {
+  return `letters:${sessionId}`;
 }

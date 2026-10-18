@@ -1,13 +1,17 @@
-import type { ApplicationRecord } from "./store.js";
+import type { ApplicationRecord, BoardId } from "./store.js";
 
 export type ApplyPackItem = {
   id: string;
-  board: "zhilian" | "liepin" | "job51";
+  board: BoardId;
   title: string;
   company: string;
   city: string;
   url: string;
+  salary?: string;
+  matchScore?: number;
   coverNote?: string;
+  greeting?: string;
+  coverLetter?: string;
   status: ApplicationRecord["status"];
 };
 
@@ -46,7 +50,11 @@ export function applicationsToPack(
       company: a.job.company,
       city: a.job.city,
       url: a.job.url,
+      salary: a.job.salary,
+      matchScore: a.job.matchScore,
       coverNote: a.coverNote,
+      greeting: a.greeting,
+      coverLetter: a.coverLetter,
       status: a.status,
     }));
   return {
@@ -59,6 +67,23 @@ export function applicationsToPack(
 
 export function applyPackPath(sessionId: string, stamp: string): string {
   return `apply-packs/${sessionId}/pack-${stamp}.json`;
+}
+
+export function parseApplyPack(raw: string): ApplyPack {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid apply pack: not JSON");
+  }
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid apply pack: expected an object");
+  }
+  const pack = data as ApplyPack;
+  if (pack.version !== 1 || !Array.isArray(pack.items)) {
+    throw new Error("Invalid apply pack: expected version 1 with items[]");
+  }
+  return pack;
 }
 
 /** Best-effort selectors for “申请/投递” buttons — never click without user confirm. */
@@ -91,6 +116,14 @@ export const boardApplyHints: Record<
       "text=立即申请",
       "button:has-text('申请')",
       "a:has-text('申请')",
+    ],
+  },
+  boss: {
+    label: "BOSS直聘",
+    selectors: [
+      "text=立即沟通",
+      "text=继续沟通",
+      "button:has-text('立即沟通')",
     ],
   },
 };
