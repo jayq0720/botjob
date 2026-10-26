@@ -2,6 +2,7 @@ import { excludedEmployer, employerReview } from "./employers.js";
 import { freshness, SEARCH_MAX_AGE_MS } from "./freshness.js";
 import { configureEnvironmentProxy, networkErrorMessage } from "../network.js";
 import type { BoardId, SearchCriteria } from "./types.js";
+import { job51Search } from "./job51.js";
 import { liepinSearch } from "./liepin.js";
 import { zhilianSearch, ZHILIAN_CITY_ID } from "./zhilian.js";
 import { allowedJobUrl, canonicalJobUrl, type JobPosting } from "../jd.js";
@@ -240,8 +241,10 @@ function searchPack(board: BoardId, criteria: SearchCriteria) {
       return zhilianSearch(criteria);
     case "liepin":
       return liepinSearch(criteria);
+    case "job51":
+      return job51Search(criteria);
     default:
-      throw new Error("仅支持智联和猎聘。");
+      throw new Error("仅支持智联、猎聘和前程无忧。");
   }
 }
 
@@ -254,6 +257,10 @@ export async function fetchBoard(
   const limit = Math.max(1, Math.min(20, options.limit ?? MAX_LISTINGS));
   const now = Date.now();
   const pack = searchPack(board, criteria);
+  if (board === "job51" && !options.read) {
+    // we.51job.com search is a script-rendered shell; a plain fetch can never contain jobs.
+    return { board, ok: false, reason: "parse_error", message: "前程无忧的搜索结果由页面脚本加载，请用 accessMode=\"browser\" 重试（会打开 botjob 浏览器窗口）。", listings: [], detailErrors: [] };
+  }
   const fetched = await read(pack.searchUrl);
   if ("error" in fetched) {
     return {

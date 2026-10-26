@@ -35,7 +35,7 @@ const version: string = JSON.parse(readFileSync(path.join(root, "package.json"),
 const skillPath = path.join(root, "bot/skills/job-hunt/SKILL.md");
 
 const INSTRUCTIONS = [
-  "botjob 是本机求职助手，只处理智联、猎聘 的 https 链接。",
+  "botjob 是本机求职助手，只处理智联、猎聘、前程无忧的 https 链接。",
   "每次开始先调用 get_workspace 恢复进度；用 list_jobs 读取候选池，避免重复索要简历或丢失之前保存的岗位。",
   "顺序：save_resume → save_resume_profile → search_jobs 或 score_job → 你来写打招呼语和求职信 → save_cover_letter → queue_apply → apply_jobs 预览并一次确认整批后投递；手动路径为 approve_apply → export_apply_pack。",
   "不要编造岗位。不要改已批准话术。投递优先使用 apply_jobs：一次确认整批岗位后在本机执行；也可使用 localCommand 手动模式。遇到搜索 userActions 登录提示时调用 open_job_login，让用户自己登录，再以 accessMode=browser 继续。",
@@ -58,7 +58,7 @@ BDK 的 queue_apply 自带审批卡片。这个 stdio 服务器没有审批卡�
 5. 手动模式把 localCommand 给用户逐条操作。使用一键投递时，queue_apply 后直接 apply_jobs 预览并一次确认整批，无需先 approve_apply 或导出。
 `;
 
-const boardSchema = z.enum(["zhilian", "liepin"]);
+const boardSchema = z.enum(["zhilian", "liepin", "job51"]);
 
 const saveResumeSchema = z
   .object({
@@ -130,7 +130,7 @@ const scoreSchema = z
       .optional()
       .describe("已经拿到的岗位详情 HTML。提供时只解析这份 HTML，不访问网络。"),
     url: z.string().optional().describe("岗位 https 链接，域名必须属于对应招聘站"),
-    board: boardSchema.optional().describe("zhilian 或 liepin。链接能判断时可以省略。"),
+    board: boardSchema.optional().describe("zhilian、liepin 或 job51。链接能判断时可以省略。"),
     title: z.string().optional(),
     company: z.string().optional(),
     city: z.string().optional(),
@@ -159,7 +159,7 @@ const queueJobSchema = z
   })
   .refine((job) => jobUrlAllowed(job.url, job.board), {
     message:
-      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com），且域名与 board 一致。",
+      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com、51job.com），且域名与 board 一致。",
   });
 
 const READ = {
@@ -286,7 +286,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "搜索岗位",
       description:
-        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
+        "按已保存画像生成智联、猎聘、前程无忧的搜索链接（前程无忧需 accessMode=browser）。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
       inputSchema: searchSchema,
       annotations: {
         readOnlyHint: false,
@@ -361,7 +361,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "加入投递队列",
       description:
-        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来一键模式调用 apply_jobs 预览并确认整批；手动模式让用户确认，再调用 approve_apply。",
+        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘、前程无忧的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来一键模式调用 apply_jobs 预览并确认整批；手动模式让用户确认，再调用 approve_apply。",
       inputSchema: z.object({
         jobs: z.array(queueJobSchema).min(1).max(10),
         coverNote: z.string().optional().describe("还没单独保存话术时的简短备注"),

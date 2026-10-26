@@ -28,7 +28,7 @@ export async function deliverOnPage(page: Page, app: ApplicationRecord, beforeCl
   if (!current || compact(current.title) !== compact(job.title) || compact(current.company) !== compact(job.company)) return paused("页面职位或公司与确认内容不一致，未点击。请重新搜索核实。");
   const evidence = { ...current, companyIndustry: current.companyIndustry || job.companyIndustry };
   if (excludedEmployer(evidence) || employerReview(evidence) === "needs_review" || freshness(current) !== "recent") return paused("当前岗位的公司或最近72小时条件未通过核验，未点击。");
-  const header = page.locator(job.board === "liepin" ? ".job-apply-container" : ".summary-planes, .summary-plane");
+  const header = page.locator({ liepin: ".job-apply-container", zhilian: ".summary-planes, .summary-plane", job51: ".tHeader" }[job.board]);
   if (await header.count() !== 1) return paused("无法确认当前岗位的操作区域，未点击，请手动处理。");
   const scope = header;
   const buttons = scope.locator('button:visible, a:visible, [role="button"]:visible');

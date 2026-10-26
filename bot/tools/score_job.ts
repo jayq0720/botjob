@@ -3,7 +3,7 @@ import * as z from "zod/v4";
 import { scoreJob } from "../lib/actions.js";
 import { actionContextFromTool } from "../lib/bdk-context.js";
 
-const boardSchema = z.enum(["zhilian", "liepin"]);
+const boardSchema = z.enum(["zhilian", "liepin", "job51"]);
 
 export default defineTool({
   description:

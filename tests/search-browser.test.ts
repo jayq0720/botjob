@@ -17,17 +17,22 @@ const date = new Date(Date.now() - 3600_000).toISOString();
 test("browser search waits for delayed DOM and reads nested/reordered fields on both boards", { skip: !existsSync(executablePath), timeout: 45_000 }, async () => {
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
-    for (const board of ["liepin", "zhilian"] as const) {
-      const jobUrl = board === "liepin" ? "https://www.liepin.com/job/123.shtml" : "https://www.zhaopin.com/jobdetail/CC123.htm";
-      const card = board === "liepin"
+    for (const board of ["liepin", "zhilian", "job51"] as const) {
+      const jobUrl = { liepin: "https://www.liepin.com/job/123.shtml", zhilian: "https://www.zhaopin.com/jobdetail/CC123.htm", job51: "https://jobs.51job.com/shanghai-pdxq/123.html" }[board];
+      const sensors = JSON.stringify({ jobId: "123", jobTitle: "薪酬经理", jobTime: date }).replaceAll('"', "&quot;");
+      const card = board === "job51"
+        ? `<div class="joblist-item"><div class="joblist-item-job" sensorsdata="${sensors}"><a href="${jobUrl}?s=sou"><span class="jname">薪酬经理</span></a><a class="cname">示例科技</a><span class="dc">软件服务</span><span class="dc">100-499人</span><span class="dc">B轮</span></div></div>`
+        : board === "liepin"
         ? `<div class="extra job-card-wrapper"><div class="extra job-card-pc-container"><a href="${jobUrl}?from=search"><div class="job-title-box"><div class="ellipsis-1 extra" title="薪酬经理"><b>薪酬经理</b></div></div></a><span class="company-name"><b>示例科技</b></span><div class="company-tags-box"><span>软件服务</span><span>100-499人</span><span>B轮</span></div></div></div>`
         : `<div class="extra joblist-box__item"><a href="${jobUrl}" class="extra jobinfo__name"><b>薪酬经理</b></a><a class="extra companyinfo__name"><b>示例科技</b></a><div class="companyinfo__tag"><div>100-499人</div><div>软件服务</div><div>B轮</div></div></div>`;
-      const detail = board === "liepin"
+      const detail = board === "job51"
+        ? `<div class="tHeader"><h1 title="薪酬经理">薪酬经理</h1><p class="msg ltype" title="上海-浦东新区 | 5-7年经验 | 本科">上海</p><a class="catn">示例科技</a></div><div class="bmsg job_msg inbox"><p>${jd}</p></div>${company}`
+        : board === "liepin"
         ? `<section class="job-apply-container"><span class="extra name"><b>薪酬经理</b></span><span class="update-time">${date}</span></section><div class="company-info"><span class="name">示例科技</span></div><div data-extra="yes" data-selector="job-intro-content"><p>${jd}</p></div>${company}`
         : `<section class="summary-planes"><h1 class="extra summary-planes__title"><b>薪酬经理</b></h1></section><a class="company-info__name">示例科技</a><div class="describtion-card__detail-content"><div>${jd}</div></div>${company}`;
       const context = await browser.newContext();
       await context.route("**/*", route => {
-        const isDetail = /\/(?:job|jobdetail)\//.test(route.request().url());
+        const isDetail = /\/(?:job|jobdetail)\/|jobs\.51job\.com\/[a-z-]+\/\d+\.html/.test(route.request().url());
         const state = board === "zhilian" && isDetail ? `window.__INITIAL_STATE__={jobDetail:{detailedPosition:{number:'CC123',positionUpdateTime:${JSON.stringify(date)}}}};` : "";
         // Delayed JS after DOMContentLoaded/network idle.
         const body = `<div id="app"></div><script>setTimeout(()=>{${state}document.getElementById('app').innerHTML=${JSON.stringify(isDetail ? detail : card)}},${isDetail ? 350 : 3400});</script>`;

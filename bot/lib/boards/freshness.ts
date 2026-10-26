@@ -27,7 +27,7 @@ export function jobTime(raw: unknown, kind: "updated" | "published", now = Date.
     ms = Number.isFinite(chinaDate(year, month, day)) ? Date.parse(value) : NaN;
   } else {
     const full = value.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-    const short = value.match(/^(\d{1,2})月(\d{1,2})日$/);
+    const short = value.match(/^(\d{1,2})月(\d{1,2})日$/) ?? value.match(/^(\d{1,2})-(\d{1,2})$/);
     const relative = value.match(/^(\d+)\s*(分钟|小时|天)前$/);
     const local = new Date(now + 8 * 3600_000);
     if (full) ms = chinaDate(+full[1], +full[2], +full[3], +(full[4] ?? 0), +(full[5] ?? 0), +(full[6] ?? 0));

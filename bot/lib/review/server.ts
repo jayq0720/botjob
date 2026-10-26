@@ -11,7 +11,7 @@ import { applicationsKey, scoredJobsKey, type ApplicationRecord, type JobListing
 import { REVIEW_PAGE } from "./page.js";
 
 const MAX_BATCH = 10;
-const BOARD_NAMES: Record<string, string> = { zhilian: "智联", liepin: "猎聘" };
+const BOARD_NAMES: Record<string, string> = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
 const DONE = new Set<ApplicationRecord["status"]>(["submitted_auto", "submitted_manual", "applying", "submission_unknown"]);
 
 function excerpt(text: string | undefined, max: number): string | undefined {

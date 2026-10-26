@@ -1,4 +1,4 @@
-export const SUPPORTED_BOARDS = ["zhilian", "liepin"] as const;
+export const SUPPORTED_BOARDS = ["zhilian", "liepin", "job51"] as const;
 export type BoardId = (typeof SUPPORTED_BOARDS)[number];
 
 export type SearchCriteria = {
