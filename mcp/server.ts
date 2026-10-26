@@ -25,6 +25,9 @@ import {
   searchJobs,
 } from "../bot/lib/actions.js";
 import { jobUrlAllowed } from "../bot/lib/jd.js";
+import { openInDefaultBrowser } from "../bot/lib/boards/system-browser.js";
+import { createReviewServer } from "../bot/lib/review/server.js";
+import { scoredJobsKey, type JobListing } from "../bot/lib/store.js";
 import { mcpActionContext } from "../bot/lib/state-store.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -181,12 +184,13 @@ const REPLACE = {
 
 type ToolExtra = RequestHandlerExtra<never, never>;
 
-export function createBotjobServer(options: { openLogin?: typeof browserAccess.open; deliveryDriver?: DeliveryDriver; actionContext?: ReturnType<typeof mcpActionContext> } = {}): McpServer {
+export function createBotjobServer(options: { openLogin?: typeof browserAccess.open; deliveryDriver?: DeliveryDriver; actionContext?: ReturnType<typeof mcpActionContext>; openUrl?: (url: string) => Promise<unknown> } = {}): McpServer & { closeReview(): Promise<void> } {
   const server = new McpServer(
     { name: "botjob", version },
     { instructions: INSTRUCTIONS },
   );
   const ctx = () => options.actionContext ?? mcpActionContext();
+  const review = createReviewServer(ctx, options.deliveryDriver ?? browserDelivery);
 
   server.registerTool("get_workspace", {
     title: "恢复求职进度",
@@ -205,6 +209,38 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     }),
     annotations: READ,
   }, async (args) => run(() => listJobs(ctx(), args)));
+
+  server.registerTool("open_job_list", {
+    title: "打开岗位列表（一键投递按钮）",
+    description: "在用户电脑的系统默认浏览器打开本机岗位列表页：每个已保存岗位显示岗位简介、公司简介、匹配分和投递状态，用户勾选后点「一键投递所选岗位」并在弹窗确认，botjob 随即在登录窗口依次投递。search_jobs 后调用；先为每个岗位写 jobSummary（两三句概括职责与硬性要求）和 companySummary（一两句公司概况，只用 companyIntro/行业/规模等已有字段，未提供就省略），一并传入。页面上的点击就是用户确认，你不要替用户访问或操作该页面。",
+    inputSchema: z.object({
+      summaries: z.array(z.object({
+        jobId: z.string(),
+        jobSummary: z.string().max(300).optional(),
+        companySummary: z.string().max(300).optional(),
+      })).max(40).optional(),
+    }),
+    annotations: { ...ADD, idempotentHint: true, openWorldHint: true },
+  }, async (args) => run(async () => {
+    const c = ctx();
+    if (args.summaries?.length) {
+      await c.store.update(scoredJobsKey(c.sessionId), current => ({
+        value: ((current ?? []) as JobListing[]).map(job => {
+          const row = args.summaries!.find(item => item.jobId === job.id);
+          return row ? { ...job, jobSummary: row.jobSummary?.trim() || job.jobSummary, companySummary: row.companySummary?.trim() || job.companySummary } : job;
+        }), result: undefined,
+      }));
+    }
+    const { total } = await listJobs(c, { limit: 40 });
+    const url = await review.url();
+    try {
+      await (options.openUrl ?? openInDefaultBrowser)(url);
+      // The address stays out of the reply: the click on that page is the user's own confirmation.
+      return { opened: true, jobCount: total, message: `已在系统默认浏览器打开岗位列表（${total} 个岗位）。请在页面勾选岗位，点「一键投递所选岗位」并确认。投递在 botjob 登录窗口进行，遇到登录、验证码或补填会暂停。` };
+    } catch {
+      return { opened: false, jobCount: total, url, message: "无法自动打开浏览器。请用户本人在电脑浏览器打开这个本机地址；仅限本机访问。" };
+    }
+  }));
 
   server.registerTool(
     "save_resume",
@@ -536,7 +572,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     }),
   );
 
-  return server;
+  return Object.assign(server, { closeReview: () => review.close() });
 }
 
 function readSkill(): string {

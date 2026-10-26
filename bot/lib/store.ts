@@ -44,6 +44,9 @@ export type JobListing = JobTime & {
   companySize?: string;
   companyStage?: string;
   companyIntro?: string;
+  /** Written by the AI for the review page; never scraped. */
+  jobSummary?: string;
+  companySummary?: string;
   employerReview?: "needs_review" | "no_exclusion_evidence";
   city: string;
   salary?: string;

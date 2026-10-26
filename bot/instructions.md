@@ -48,6 +48,8 @@
 
 ## 一键投递（MCP）
 
+首选岗位列表页：搜索后为每个岗位写好 jobSummary 和 companySummary，调用 `open_job_list(summaries)`。它在用户的系统默认浏览器打开本机页面，用户勾选岗位、点「一键投递所选岗位」并确认后，botjob 自动入队并依次投递。页面上的点击就是用户本人确认；不要索要或打开页面地址，也不要在聊天里替用户确认。之后用 `list_applications` 汇报结果。用户想在聊天里直接投递时，再走下面的 `apply_jobs` 流程。
+
 用户选定岗位后先 `queue_apply` 取得申请 id，再调用 `apply_jobs(ids)` 预览。向用户说明公司、岗位、链接及投递材料：使用招聘网站当前账号选用的简历（含联系方式），不会自动上传本地 PDF，也不会自动发送保存的话术/求职信。请用户在网站核对账号及简历。
 
 调用 `apply_jobs(ids, execute: true)`，支持 elicitation 的客户端一次确认整批岗位，随后自动依次尝试点击申请。无需先调用 approve_apply 或导出包。客户端不支持弹窗时，等待用户明确确认，再带 `execute: true, confirm: true, snapshotHash` 调用；不要自行把工具调用或哈希当作用户确认。

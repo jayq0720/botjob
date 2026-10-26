@@ -35,6 +35,7 @@ const TOOL_NAMES = [
   "list_applications",
   "export_apply_pack",
   "mark_applied",
+  "open_job_list",
 ];
 
 const profile = {

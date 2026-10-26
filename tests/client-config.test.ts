@@ -25,7 +25,7 @@ test("generated client configurations start a real MCP connection from another d
       const client = new Client({ name: `test-${name}`, version: "1" });
       try {
         await client.connect(transport);
-        assert.equal((await client.listTools()).tools.length, 15);
+        assert.equal((await client.listTools()).tools.length, 16);
         const result = await client.callTool({ name: "get_workspace", arguments: {} });
         assert.equal(result.isError, undefined);
         assert.equal((result.structuredContent as Record<string, unknown>)?.savedJobs, 0);
@@ -39,7 +39,7 @@ test("generated client configurations start a real MCP connection from another d
     const client = new Client({ name: "test-codex", version: "1" });
     try {
       await client.connect(transport);
-      assert.equal((await client.listTools()).tools.length, 15);
+      assert.equal((await client.listTools()).tools.length, 16);
     } finally { await client.close(); }
   } finally { await rm(home, { recursive: true, force: true }); }
 });

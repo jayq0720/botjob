@@ -90,3 +90,11 @@ export async function resolveLoginBrowser(options: { platform?: NodeJS.Platform;
   return { browser: fallback, defaultName: detected?.name,
     note: detected ? `系统默认浏览器是 ${detected.name}，它不支持自动读取岗位，已改用 ${fallback.name}。` : undefined };
 }
+
+/** Hand a URL to the OS so it opens in the user's default browser (not the automated window). */
+export function openInDefaultBrowser(url: string, platform: NodeJS.Platform = process.platform, exec: Run = run): Promise<string> {
+  if (!/^https?:\/\//.test(url)) return Promise.reject(new Error("只能打开 http(s) 链接。"));
+  // rundll32 avoids cmd.exe parsing of & and ^ in the URL.
+  if (platform === "win32") return exec("rundll32", ["url.dll,FileProtocolHandler", url]);
+  return exec(platform === "darwin" ? "open" : "xdg-open", [url]);
+}
