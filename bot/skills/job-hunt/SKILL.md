@@ -56,7 +56,7 @@ Keys: `a` applied, `c` click 申请/立即沟通 (confirm again), `f` fill greet
 - Ask for job-board passwords or explain how to bypass a captcha.
 - Search or score before a profile exists.
 
-搜索只支持智联、猎聘，固定最近72小时。优先核验岗位更新时间，无更新字段时用发布时间；无法确认时间的岗位不展示。说明返回的来源时间及类型，不把招聘者活跃时间或网页刷新时间当作岗位更新。
+搜索支持智联、猎聘、前程无忧（前程无忧需 accessMode=browser），固定最近72小时。优先核验岗位更新时间，无更新字段时用发布时间；无法确认时间的岗位不展示。说明返回的来源时间及类型，不把招聘者活跃时间或网页刷新时间当作岗位更新。
 
 岗位展示：`listings` 里每个岗位都按这个格式给用户看，不要只列标题：
 - **岗位名｜公司｜城市｜薪资｜来源时间**，附完整链接和匹配分。

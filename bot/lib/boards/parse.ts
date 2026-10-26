@@ -154,6 +154,8 @@ export function parseSearchHtml(
       return parseZhilianSearch(html, pageUrl, now);
     case "liepin":
       return parseLiepinSearch(html, pageUrl);
+    case "job51":
+      return parseJob51Search(html, pageUrl, now);
   }
 }
 
@@ -166,10 +168,11 @@ export function parseDetailHtml(
   const fromLd = jobPostingsFromJsonLd(html, pageUrl, board).find(
     (job) => job.description.length >= 20,
   );
-  const job = fromLd ?? (board === "zhilian"
-    ? parseZhilianDetail(html, pageUrl) : parseLiepinDetail(html, pageUrl));
+  const job = fromLd ?? (board === "zhilian" ? parseZhilianDetail(html, pageUrl)
+    : board === "job51" ? parseJob51Detail(html, pageUrl, now) : parseLiepinDetail(html, pageUrl));
   if (!job) return undefined;
   job.companyIntro ??= introAfterHeading(pageText(html));
+  if (board === "job51") return job;
   if (board === "liepin") {
     // Only the job's own update label, never footer SEO dates or recruiter activity.
     const header = html.match(/<section\b[^>]*class="[^"]*\bjob-apply-container\b[^"]*"[^>]*>[\s\S]*?<\/section>/)?.[0];
@@ -349,6 +352,74 @@ function parseLiepinDetail(html: string, pageUrl: string): JobPosting | undefine
     description: description ? plain(description) : undefined,
     companyIntro: introAfterHeading(pageText(html)),
     url: pageUrl,
+  });
+}
+
+/** 51job cards keep the job record as entity-encoded JSON in a sensorsdata attribute. */
+function sensorsData(chunk: string): Record<string, unknown> {
+  const raw = chunk.match(/sensorsdata="([^"]*)"/)?.[1];
+  if (!raw) return {};
+  try {
+    const data = JSON.parse(decodeEntities(raw)) as unknown;
+    return isRecord(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJob51Search(html: string, pageUrl: string, now: number): JobPosting[] {
+  const jobs: JobPosting[] = [];
+  for (const chunk of splitChunks(html, 'class="joblist-item"')) {
+    const href = chunk.match(/href="((?:https:)?\/\/jobs\.51job\.com\/[a-z0-9-]+\/\d+\.html)[^"]*"/)?.[1];
+    if (!href) continue;
+    const data = sensorsData(chunk);
+    const labels = [textByClass(chunk, "exp"), textByClass(chunk, "edu"), asString(data.jobYear), asString(data.jobDegree)].filter((item): item is string => !!item);
+    const tags = [...chunk.matchAll(/class="[^"]*\bdc\b[^"]*"[^>]*>([^<]+)</g)].map(match => decodeEntities(match[1]).trim());
+    const job = posting({
+      board: "job51",
+      title: textByClass(chunk, "jname") || asString(data.jobTitle),
+      company: textByClass(chunk, "cname") || asString(data.companyName),
+      companyIndustry: tags.find(tag => !/\d.*人|公司$|企业$/.test(tag)),
+      companyTagText: tags.join(" ") || undefined,
+      city: textByClass(chunk, "area") || asString(data.jobArea),
+      salary: visibleSalary(textByClass(chunk, "sal") || asString(data.jobSalary)),
+      ...pickExpEdu(labels),
+      url: absUrl(href, pageUrl),
+      ...jobTime(asString(data.jobTime), "published", now),
+    });
+    if (job) jobs.push(job);
+  }
+  return jobs;
+}
+
+function parseJob51Detail(html: string, pageUrl: string, now: number): JobPosting | undefined {
+  const header = html.match(/class="[^"]*\btHeader\b[^"]*"[\s\S]*?(?=class="[^"]*\b(?:tCompany_main|tCompany_center|tBorderTop_box)\b|$)/)?.[0] ?? "";
+  const title = header.match(/<h1\b[^>]*?(?:title="([^"]+)")?[^>]*>([\s\S]*?)<\/h1>/);
+  const ltype = header.match(/class="[^"]*\bmsg ltype\b[^"]*"[^>]*title="([^"]+)"/)?.[1];
+  const parts = [
+    ...(ltype ? decodeEntities(ltype).split(/\s*[|｜]\s*/) : []),
+    ...[...header.matchAll(/class="sp4"[^>]*>([^<]+)</g)].map(match => decodeEntities(match[1])),
+  ].map(item => item.trim()).filter(Boolean);
+  const expEdu = pickExpEdu(parts);
+  const published = parts.find(part => /发布$/.test(part));
+  const city = parts.find(part => part !== expEdu.experience && part !== expEdu.education && part !== published && !/招.*人/.test(part));
+  const jd = html.match(/class="[^"]*\bbmsg job_msg\b[^"]*"[^>]*>([\s\S]*?)(?:<div class="mt10"|<div class="share"|<\/div>)/)?.[1];
+  const intro = html.match(/class="[^"]*\btmsg inbox\b[^"]*"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+  const companyTags = [...html.matchAll(/class="[^"]*\bcom_tag\b[^"]*"[\s\S]*?<\/div>/g)].flatMap(block =>
+    [...block[0].matchAll(/<p\b[^>]*class="at"[^>]*>([\s\S]*?)<\/p>/g)].map(match => plain(match[1]).trim()));
+  return posting({
+    board: "job51",
+    title: title ? decodeEntities(title[1] ?? plain(title[2])).trim() : undefined,
+    company: textByClass(html, "catn"),
+    companyIndustry: companyTags.filter(tag => !/\d.*人|公司$|企业$/.test(tag)).join(" ") || undefined,
+    companyTagText: companyTags.join(" ") || undefined,
+    companyIntro: intro ? plain(intro) : undefined,
+    city,
+    salary: visibleSalary(header.match(/<strong[^>]*>([^<]+)<\/strong>/)?.[1]),
+    ...expEdu,
+    description: jd ? plain(jd) : undefined,
+    url: pageUrl,
+    ...jobTime(published, "published", now),
   });
 }
 

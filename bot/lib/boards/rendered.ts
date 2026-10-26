@@ -13,9 +13,41 @@ export type RenderDiagnostics = {
   parsedCount: number;
 };
 
+type Selectors = { cards: string; anchor: string; title: [detail: string, card: string]; company: [string, string]; industry: [string, string];
+  labels: string; timeRoot: string; description: string; detailPath: RegExp };
+
+/** Per-board DOM selectors. 51job entries come from its public page structure and are not yet verified with a live account. */
+const SELECTORS: Record<BoardId, Selectors> = {
+  liepin: {
+    cards: ".job-card-pc-container, .job-card-wrapper", anchor: 'a[href*="/job/"]',
+    title: [".job-title .name, .job-name .name, .job-apply-container .name, h1.name", ".job-title-box [title], .job-title-box .ellipsis-1, .job-name, .ellipsis-1[title]"],
+    company: [".company-info .name, .company-info .company-name, .company-info .company-title", ".company-name"],
+    industry: [".company-info .company-tags-box", ".company-tags-box"],
+    labels: ".labels-tag, .job-properties span:not(.split)", timeRoot: ".job-apply-container",
+    description: '[data-selector="job-intro-content"], .job-intro-content', detailPath: /^\/job\/[^/]+\.shtml$/,
+  },
+  zhilian: {
+    cards: ".joblist-box__item", anchor: "a.jobinfo__name",
+    title: [".summary-planes__title, .summary-plane__title", ".jobinfo__name"],
+    company: [".company-info__name, .company__title", ".companyinfo__name"],
+    industry: [".company-info__industry", ".companyinfo__tag"],
+    labels: ".jobinfo__other-info-item, .summary-planes__info li, .summary-plane__info li", timeRoot: ".summary-planes, .summary-plane",
+    description: ".describtion__detail-content, .describtion-card__detail-content", detailPath: /^\/jobdetail\/[^/]+\.htm$/,
+  },
+  job51: {
+    cards: ".joblist-item", anchor: 'a[href*="jobs.51job.com/"]',
+    title: [".tHeader h1, .cn h1", ".jname, .joblist-item-job .jname"],
+    company: [".tCompany .catn, .com_msg .com_name, .cname a", ".cname"],
+    industry: [".com_tag, .tCompany .at", ".dc, .joblist-item-bot .dc"],
+    labels: ".msg.ltype, .tags .tag, .joblist-item-mid .tag, .exp, .edu", timeRoot: ".tHeader",
+    description: ".bmsg.job_msg, .job_msg", detailPath: /^\/[a-z0-9-]+\/\d+\.html$/,
+  },
+};
+
 /** Read only known job regions. Never collect account data, cookies or unrelated page text. */
 async function capture(page: Page, board: BoardId, detail: boolean) {
-  return page.evaluate(({ board, detail }) => {
+  const sel = { ...SELECTORS[board], detailPath: undefined };
+  return page.evaluate(({ board, detail, sel }) => {
     // Object methods survive tsx/esbuild serialization without external __name helpers.
     const dom = {
       visible(element: Element) { return !!element.getClientRects().length && getComputedStyle(element).visibility !== "hidden"; },
@@ -23,25 +55,26 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
         const node = Array.from(root.querySelectorAll(selector)).find(dom.visible);
         return node?.textContent?.replace(/\s+/g, " ").trim() ?? "";
       },
+      pick(pair: [string, string]) { return detail ? pair[0] : pair[1]; },
+      str(data: Record<string, unknown>, key: string) { return typeof data[key] === "string" ? data[key] as string : ""; },
     };
-    const cards = Array.from(document.querySelectorAll(board === "liepin"
-      ? ".job-card-pc-container, .job-card-wrapper" : ".joblist-box__item")).filter(dom.visible);
+    const cards = Array.from(document.querySelectorAll(sel.cards)).filter(dom.visible);
     // A wrapper and its nested card describe one job, not two.
     const roots = detail ? [document] : cards.filter(card => !cards.some(other => other !== card && card.contains(other)));
     const jobs = roots.slice(0, 100).map(root => {
-      const anchor = root.querySelector<HTMLAnchorElement>(board === "liepin" ? 'a[href*="/job/"]' : 'a.jobinfo__name');
-      const title = dom.text(root, detail
-        ? (board === "liepin" ? ".job-title .name, .job-name .name, .job-apply-container .name, h1.name" : ".summary-planes__title, .summary-plane__title")
-        : (board === "liepin" ? ".job-title-box [title], .job-title-box .ellipsis-1, .job-name, .ellipsis-1[title]" : ".jobinfo__name"));
-      const company = dom.text(root, board === "liepin" ? (detail ? ".company-info .name, .company-info .company-name, .company-info .company-title" : ".company-name") : (detail ? ".company-info__name, .company__title" : ".companyinfo__name"));
-      const industry = dom.text(root, board === "liepin" ? (detail ? ".company-info .company-tags-box" : ".company-tags-box") : (detail ? ".company-info__industry" : ".companyinfo__tag"));
-      const labels = Array.from(root.querySelectorAll(board === "liepin" ? ".labels-tag, .job-properties span:not(.split)" : ".jobinfo__other-info-item, .summary-planes__info li, .summary-plane__info li"))
-        .filter(dom.visible).map(node => node.textContent?.trim() ?? "");
+      const anchor = root.querySelector<HTMLAnchorElement>(sel.anchor);
+      let title = dom.text(root, dom.pick(sel.title));
+      let company = dom.text(root, dom.pick(sel.company));
+      const industry = dom.text(root, dom.pick(sel.industry));
+      const labels = Array.from(root.querySelectorAll(sel.labels))
+        .filter(dom.visible).flatMap(node => (node.getAttribute("title") || node.textContent || "").split(/\s*[|｜]\s*/)).map(text => text.trim()).filter(text => text);
       // Only explicit job-time fields; recruiter activity and arbitrary dates never count.
-      const timeRoot = detail ? root.querySelector(board === "liepin" ? ".job-apply-container" : ".summary-planes, .summary-plane") : root;
+      const timeRoot = detail ? root.querySelector(sel.timeRoot) : root;
       let updated = timeRoot ? dom.text(timeRoot, ".update-time, .job-update-time, .jobinfo__update-time") : "";
-      let published = timeRoot ? dom.text(timeRoot, ".publish-time, .job-publish-time, .jobinfo__publish-time") : "";
+      let published = timeRoot ? dom.text(timeRoot, ".publish-time, .job-publish-time, .jobinfo__publish-time, .time") : "";
       const url = detail ? location.href : anchor?.href ?? "";
+      let salary = dom.text(root, ".job-salary, .jobinfo__salary, .salary, .sal, .summary-planes__salary, .summary-plane__salary, .tHeader strong");
+      let city = dom.text(root, ".job-dq-box, .job-area, .area");
       if (board === "zhilian") {
         // SPA may keep source times only in runtime state, without a serialized script.
         const state = (window as unknown as { __INITIAL_STATE__?: { positionList?: Record<string, unknown>[]; jobDetail?: { detailedPosition?: Record<string, unknown> } } }).__INITIAL_STATE__;
@@ -52,21 +85,28 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
           if (!published) published = [position.positionPublishTime, position.publishTime].find(value => typeof value === "string") as string ?? "";
         }
       }
-      const companyIntro = detail ? dom.text(root, ".company-intro-container .inner, .company-intro, .company-info__desc, .company__desc, .intro-content") : "";
-      const description = detail ? dom.text(root, board === "liepin" ? '[data-selector="job-intro-content"], .job-intro-content' : ".describtion__detail-content, .describtion-card__detail-content") : "";
-      return { title, company, industry, labels, updated, published, description, companyIntro,
-        url,
-        salary: dom.text(root, ".job-salary, .jobinfo__salary, .salary, .summary-planes__salary, .summary-plane__salary"),
-        city: dom.text(root, ".job-dq-box, .job-area") };
+      if (board === "job51") {
+        // 51job cards carry the job record as JSON in a sensorsdata attribute.
+        const raw = (root as Element).querySelector?.("[sensorsdata]")?.getAttribute("sensorsdata") ?? (root as Element).getAttribute?.("sensorsdata");
+        let data: Record<string, unknown> = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch { /* Malformed attribute: fall back to DOM text. */ }
+        title ||= dom.str(data, "jobTitle"); salary ||= dom.str(data, "jobSalary"); city ||= dom.str(data, "jobArea"); company ||= dom.str(data, "companyName");
+        if (!published) published = dom.str(data, "jobTime");
+        if (detail && !published) published = labels.find(label => /发布$/.test(label)) ?? "";
+        for (const key of ["jobYear", "jobDegree"]) if (dom.str(data, key)) labels.push(dom.str(data, key));
+      }
+      const companyIntro = detail ? dom.text(root, ".company-intro-container .inner, .company-intro, .company-info__desc, .company__desc, .intro-content, .tmsg.inbox") : "";
+      const description = detail ? dom.text(root, sel.description) : "";
+      return { title, company, industry, labels, updated, published, description, companyIntro, url, salary, city };
     });
-    const empty = Array.from(document.querySelectorAll('.search-empty, .job-list-empty, .no-result, .no-data, .empty-result'))
+    const empty = Array.from(document.querySelectorAll('.search-empty, .job-list-empty, .no-result, .no-data, .empty-result, .j_nolist'))
       .some(node => dom.visible(node) && /暂无|没有|未找到|无符合/.test(node.textContent ?? ""));
-    const restricted = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel'))
-      .some(node => dom.visible(node) && /扫码登录|验证码|安全验证|人机验证|登录后.*(?:职位|岗位)/.test(node.textContent ?? ""));
+    const restricted = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel, #nc_1_wrapper'))
+      .some(node => dom.visible(node) && /扫码登录|验证码|安全验证|人机验证|滑动验证|拖动滑块|登录后.*(?:职位|岗位)/.test(node.textContent ?? ""));
     // Visible page text lets the host find a "公司介绍" section when no known selector matches.
     const pageText = detail ? (document.body?.innerText ?? "").slice(0, 30_000) : "";
     return { jobs, cardCount: roots.length, empty, restricted, pageText };
-  }, { board, detail });
+  }, { board, detail, sel });
 }
 
 function postings(raw: Awaited<ReturnType<typeof capture>>, board: BoardId, now: number): JobPosting[] {
@@ -74,7 +114,7 @@ function postings(raw: Awaited<ReturnType<typeof capture>>, board: BoardId, now:
   for (const item of raw.jobs) {
     if (!item.title || !jobUrlAllowed(item.url, board)) continue;
     const url = new URL(item.url);
-    if (!(board === "liepin" ? /^\/job\/[^/]+\.shtml$/ : /^\/jobdetail\/[^/]+\.htm$/).test(url.pathname)) continue;
+    if (!SELECTORS[board].detailPath.test(url.pathname)) continue;
     const key = canonicalJobUrl(item.url);
     unique.set(key, {
       board, title: item.title, company: item.company || "（未提供）", companyIndustry: item.industry || undefined,
@@ -95,7 +135,7 @@ export async function readRenderedJobs(page: Page, board: BoardId, options: { ti
   const started = Date.now();
   const timeout = options.timeoutMs ?? 10_000;
   const settle = options.settleMs ?? 750;
-  const detail = /\/(?:job|jobdetail)\/[^/]+\.(?:shtml|htm)(?:[?#]|$)/.test(page.url());
+  const detail = (() => { try { return SELECTORS[board].detailPath.test(new URL(page.url()).pathname); } catch { return false; } })();
   let signature = "";
   let stableSince = started;
   let snapshot: Awaited<ReturnType<typeof capture>>;

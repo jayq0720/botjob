@@ -41,6 +41,7 @@ export function boardFromUrl(url: string): BoardId | undefined {
   }
   if (host === "zhaopin.com" || host.endsWith(".zhaopin.com")) return "zhilian";
   if (host === "liepin.com" || host.endsWith(".liepin.com")) return "liepin";
+  if (host === "51job.com" || host.endsWith(".51job.com")) return "job51";
   return undefined;
 }
 
@@ -62,7 +63,7 @@ export function jobUrlAllowed(url: string, board: BoardId): boolean {
 
 /**
  * Posting identity. Both boards put the job id in the path, not the query:
- * 智联 `/jobdetail/{id}.htm`, 猎聘 `/job/{id}.shtml`,
+ * 智联 `/jobdetail/{id}.htm`, 猎聘 `/job/{id}.shtml`, 前程无忧 `/{area}/{id}.html`,
  * Host is lowercased, the query and fragment are dropped, and a trailing slash is removed.
  */
 export function canonicalJobUrl(url: string): string {
@@ -81,7 +82,7 @@ export function listingFromPosting(
 ): JobListing {
   if (!jobUrlAllowed(posting.url, posting.board)) {
     throw new Error(
-      "岗位 URL 必须是该 board 对应站点的 https 链接（智联 zhaopin.com、猎聘 liepin.com）。",
+      "岗位 URL 必须是该 board 对应站点的 https 链接（智联 zhaopin.com、猎聘 liepin.com、前程无忧 51job.com）。",
     );
   }
   const score: ScoreBreakdown = scoreJob(profile, posting);

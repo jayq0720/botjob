@@ -1,3 +1,4 @@
+import { job51Search } from "./job51.js";
 import { liepinSearch } from "./liepin.js";
 import { zhilianSearch } from "./zhilian.js";
 import type { BoardId, BoardSearchPack, SearchCriteria } from "./types.js";
@@ -5,7 +6,7 @@ import type { ResumeProfile } from "../store.js";
 
 export type { BoardId, BoardSearchPack, SearchCriteria };
 
-const ALL_BOARDS: BoardId[] = ["zhilian", "liepin"];
+const ALL_BOARDS: BoardId[] = ["zhilian", "liepin", "job51"];
 
 export function buildSearchPacks(
   criteria: SearchCriteria,
@@ -18,8 +19,10 @@ export function buildSearchPacks(
         return zhilianSearch(criteria);
       case "liepin":
         return liepinSearch(criteria);
+      case "job51":
+        return job51Search(criteria);
       default:
-        throw new Error("仅支持智联和猎聘。");
+        throw new Error("仅支持智联、猎聘和前程无忧。");
     }
   });
 }

@@ -8,7 +8,8 @@ import type { PageReader } from "./fetch.js";
 import { readRenderedJobs } from "./rendered.js";
 import { resolveLoginBrowser } from "./system-browser.js";
 
-const homes = { zhilian: "https://www.zhaopin.com/", liepin: "https://www.liepin.com/" };
+const homes = { zhilian: "https://www.zhaopin.com/", liepin: "https://www.liepin.com/", job51: "https://login.51job.com/login.php" };
+const names = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
 
 /** Cookies remain in a dedicated local browser profile; never returned to the AI. */
 export function createBrowserAccess(launch: () => Promise<BrowserContext>, render = readRenderedJobs, describe: () => LaunchInfo | undefined = () => launched) {
@@ -31,7 +32,7 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
     const info = describe();
     const where = info ? `${info.name}中的 botjob 窗口` : "botjob 打开的浏览器窗口";
     return { ok: true as const, board, status: "awaiting_login" as const, url, ...(info ? { browser: info.name } : {}),
-      message: `${info?.note ? info.note + " " : ""}请在${where}里登录${board === "liepin" ? "猎聘" : "智联"}账号（该窗口使用独立的登录记录，平时浏览器里的登录不会带过来，但登录一次后会被记住）。智联和猎聘在同一个窗口的不同标签页。完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
+      message: `${info?.note ? info.note + " " : ""}请在${where}里登录${names[board]}账号（该窗口使用独立的登录记录，平时浏览器里的登录不会带过来，但登录一次后会被记住）。各招聘站在同一个窗口的不同标签页。完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
   }
   function reader(board: BoardId): PageReader {
     return async url => {

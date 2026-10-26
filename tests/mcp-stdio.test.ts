@@ -117,7 +117,7 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     assert.deepEqual(names, [...TOOL_NAMES].sort());
     const byName = new Map(listed.tools.map((tool) => [tool.name, tool]));
     const schema = byName.get("search_jobs")!.inputSchema as unknown as { properties: { boards: { items: { enum: string[] } } } };
-    assert.deepEqual(schema.properties.boards.items.enum, ["zhilian", "liepin"]);
+    assert.deepEqual(schema.properties.boards.items.enum, ["zhilian", "liepin", "job51"]);
     assert.match(byName.get("search_jobs")!.description!, /72小时/);
     assert.equal(byName.get("get_resume")?.annotations?.readOnlyHint, true);
     assert.equal(byName.get("list_applications")?.annotations?.readOnlyHint, true);

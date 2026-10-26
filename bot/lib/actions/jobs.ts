@@ -173,7 +173,7 @@ export async function scoreJob(ctx: ActionContext, input: ScoreJobInput) {
   if (!board) {
     return {
       ok: false as const,
-      message: "贴 JD 文本时请指定 board：zhilian 或 liepin。",
+      message: "贴 JD 文本时请指定 board：zhilian、liepin 或 job51。",
     };
   }
 
