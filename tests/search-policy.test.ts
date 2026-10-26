@@ -63,6 +63,40 @@ test("partial login wall preserves public results, prompts and stops further rea
   assert.equal(reads, 1);
 });
 
+test("a later list-only job still reports login, captcha, or a block when an earlier card already has a JD", async () => {
+  const fresh = new Date(Date.now() - 3600_000).toISOString();
+  const jd = "负责薪酬核算、绩效方案设计、人力成本预算及员工关系管理。";
+  const card = (id: string, description: string) => ({
+    board: "liepin" as const, title: "薪酬经理", company: "示例科技", companyIndustry: "软件服务", city: "上海",
+    description, url: `https://www.liepin.com/job/${id}.shtml`,
+    jdStatus: description.length >= 20 ? "detail" as const : "list_only" as const,
+    sourceUpdatedAt: fresh, sourceTimeText: "1小时前", sourceTimeKind: "updated" as const,
+  });
+  const walls = [
+    ["登录后查看完整职位", 200, "login_required"],
+    ["Security Verification", 200, "captcha"],
+    ["拒绝", 403, "blocked"],
+  ] as const;
+  for (const [body, status, reason] of walls) {
+    const reads: string[] = [];
+    const read: PageReader = async url => {
+      reads.push(url);
+      if (!url.includes("/job/")) return { status: 200, finalUrl: url, contentType: "text/html", body: "<main></main>", rendered: {
+        jobs: [card("111", jd), card("222", "")],
+        diagnostics: { mode: "browser", state: "ready", pageKind: "search", elapsedMs: 1, cardCount: 2, parsedCount: 2 },
+      } };
+      return { status, finalUrl: url, contentType: "text/html", body };
+    };
+    const result = await fetchBoard("liepin", { titles: ["薪酬经理"], cities: ["上海"], keywords: [] }, { read });
+    assert.equal(reads.some(url => url.includes("/job/111")), false, reason);
+    assert.equal(reads.some(url => url.includes("/job/222")), true, reason);
+    assert.equal(result.userActions?.[0]?.reason, reason);
+    assert.equal(result.userActions?.[0]?.url, "https://www.liepin.com/job/222.shtml");
+    assert.equal(result.detailFailures?.[0]?.reason, reason);
+    assert.equal(result.detailFailures?.[0]?.url, "https://www.liepin.com/job/222.shtml");
+  }
+});
+
 test("detail login wall stops remaining details and reports the affected URL", async () => {
   let reads = 0;
   const read: PageReader = async url => {

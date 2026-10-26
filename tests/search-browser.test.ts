@@ -83,6 +83,31 @@ test("browser diagnostics distinguish empty, timeout, login and unknown job time
   } finally { await browser.close(); }
 });
 
+test("rendered company intro ignores a nav-only page and a footer link list", { skip: !existsSync(executablePath), timeout: 30_000 }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const context = await browser.newContext();
+    let markup = "";
+    await context.route("**/*", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: markup }));
+    const page = await context.newPage();
+    const shell = `<section class="job-apply-container"><span class="name">薪酬经理</span><span class="update-time">${date}</span></section><div data-selector="job-intro-content">${jd}</div>`;
+    const links = ["联系我们", "加入我们", "隐私政策", "用户协议", "网站地图", "帮助中心", "客服热线", "意见反馈", "合作洽谈", "媒体中心", "法律声明", "网站导航"];
+    const cases = [
+      `${shell}<nav><a>公司介绍</a><a>在招职位</a><a>热门职位</a><a>城市频道</a><a>校园招聘</a><a>海外职位</a><a>名企招聘</a><a>高薪职位</a></nav>`,
+      `${shell}<footer><a>关于我们</a>${links.map(label => `<a>${label}</a>`).join("")}</footer>`,
+    ];
+    try {
+      for (const html of cases) {
+        markup = html;
+        await page.goto("https://www.liepin.com/job/123.shtml");
+        const result = await readRenderedJobs(page, "liepin", { timeoutMs: 2000, settleMs: 50 });
+        assert.equal(result.jobs.length, 1);
+        assert.equal(result.jobs[0].companyIntro, undefined);
+      }
+    } finally { await page.close(); }
+  } finally { await browser.close(); }
+});
+
 test("failed details keep the failure reason instead of reporting an empty search", async () => {
   let reads = 0;
   const report = await fetchBoard("liepin", criteria, { read: async url => {

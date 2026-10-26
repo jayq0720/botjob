@@ -394,21 +394,13 @@ async function enrichDetails(
   const detailFailures: NonNullable<BoardFetchReport["detailFailures"]> = [];
   const jobs: JobPosting[] = [];
   for (const [index, listing] of listings.entries()) {
-    // Detail pages also carry the company intro, so a list JD alone does not skip them.
-    if (index >= maxDetails || (listing.jdStatus === "detail" && listing.companyIntro) || !listing.url) {
+    // Do not open a detail page only to fill a company intro. A login wall on that
+    // extra read used to stop the loop before later list-only jobs could record one.
+    if (index >= maxDetails || listing.jdStatus === "detail" || !listing.url) {
       jobs.push(listing);
       continue;
     }
     const detail = await fetchJobUrl(listing.url, board, now, read);
-    if (!detail.ok && listing.jdStatus === "detail") {
-      // The JD is already in hand; a missing company intro is not worth a login prompt.
-      jobs.push(listing);
-      if (["login_required", "captcha", "blocked"].includes(detail.reason)) {
-        jobs.push(...listings.slice(index + 1));
-        break;
-      }
-      continue;
-    }
     if (!detail.ok) {
       detailErrors.push(`${listing.url}：${detail.message}`);
       detailFailures.push({ url: listing.url, reason: detail.reason });

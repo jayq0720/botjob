@@ -18,6 +18,18 @@ test("company intro skips navigation tabs and stops at the next section", () => 
   assert.ok(long && long.length <= 401 && long.endsWith("…"));
 });
 
+test("company intro keeps the section body and drops nav-only or footer-only text", () => {
+  const intro = "示例科技成立于2010年，专注企业人力资源软件，服务超过三千家中大型客户，总部位于上海浦东。";
+  const page = `公司介绍\n在招职位\n公司介绍\n${intro}\n工作地点\n上海浦东`;
+  assert.equal(introAfterHeading(page), intro);
+  const navOnly = "公司介绍 在招职位 热门职位 城市频道 校园招聘 海外职位 名企招聘 高薪职位 急聘职位 实习职位";
+  assert.ok(navOnly.length >= 40);
+  assert.equal(introAfterHeading(navOnly), undefined);
+  const footer = "关于我们 " + ["联系我们", "加入我们", "隐私政策", "用户协议", "网站地图", "帮助中心", "客服热线", "意见反馈", "合作洽谈", "媒体中心", "法律声明", "网站导航"].join(" ");
+  assert.ok(footer.slice("关于我们 ".length).length >= 40);
+  assert.equal(introAfterHeading(footer), undefined);
+});
+
 test("static detail pages and search cards carry company facts", () => {
   const html = `<span class="name">薪酬经理</span><dd data-selector="job-intro-content">负责薪酬体系设计、绩效考核与人力成本分析，向HRD汇报。</dd>
     <script>var nav = "公司介绍";</script><h3>公司介绍</h3><div>示例集团成立于2005年，主营新能源汽车零部件，在长三角拥有五个生产基地和两千名员工。</div><h3>工作地址</h3>`;

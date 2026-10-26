@@ -19,14 +19,27 @@ export function trimIntro(text: string | undefined): string | undefined {
   return clean.length > MAX_INTRO ? clean.slice(0, MAX_INTRO).replace(/[，。；、,.;\s]*[^，。；、,.;]*$/, "") + "…" : clean;
 }
 
+/** Nav tabs and footer link lists are short labels. A company intro is a punctuated sentence. */
+function navFragment(text: string): boolean {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean || /[，。；！？、,.!?]/.test(clean)) return false;
+  return clean.split(/\s+/).every(part => part.length <= 12);
+}
+
 /** Text after a "公司介绍" heading in a page's plain text, up to the next known section. */
 export function introAfterHeading(plainText: string): string | undefined {
-  // Navigation tabs reuse the heading words, so take the first occurrence followed by real prose.
   for (const heading of plainText.matchAll(new RegExp(INTRO_HEADING, "g"))) {
-    const start = heading.index + heading[0].length;
+    const start = (heading.index ?? 0) + heading[0].length;
     const rest = plainText.slice(start, start + 3000).replace(/^[\s:：]+/, "");
-    const end = rest.search(NEXT_SECTION);
-    const intro = trimIntro(end >= 0 ? rest.slice(0, end) : rest);
+    const nextHeading = rest.search(INTRO_HEADING);
+    const nextSection = rest.search(NEXT_SECTION);
+    const end = nextSection >= 0 ? nextSection : rest.length;
+    // A tab named 公司介绍 sits in front of the real heading. The gap is only more tabs.
+    const between = nextHeading >= 0 && nextHeading < end ? rest.slice(0, nextHeading) : "";
+    if (between && (navFragment(between) || between.replace(/\s+/g, "").length < 40)) continue;
+    const chunk = rest.slice(0, end);
+    if (navFragment(chunk) || !/[，。；！？、,.!?]/.test(chunk)) continue;
+    const intro = trimIntro(chunk);
     if (intro && intro.length >= 40) return intro;
   }
   return undefined;
