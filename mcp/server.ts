@@ -262,7 +262,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
 
   server.registerTool("open_job_login", {
     title: "登录招聘网站后继续",
-    description: "搜索遇到登录限制时打开本机独立浏览器，让用户自己登录。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
+    description: "搜索遇到登录限制时用系统默认浏览器打开 botjob 窗口（Firefox/Safari 改用 Chrome/Edge），让用户自己登录；登录记录保存在本机，下次自动复用。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
     inputSchema: z.object({ board: boardSchema, url: z.string().optional().describe("该站搜索链接或受限岗位链接") }),
     annotations: { ...ADD, openWorldHint: true },
   }, async (args, extra) => run(async () => {

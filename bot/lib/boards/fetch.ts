@@ -292,7 +292,7 @@ export async function fetchBoard(
       const diagnostics = fetched.rendered.diagnostics;
       const empty = diagnostics.state === "empty";
       return { board, ok: false, reason: empty ? "empty" : diagnostics.cardCount > 0 || diagnostics.state !== "timeout" ? "parse_error" : "render_timeout",
-        message: empty ? "网站明确显示暂无搜索结果。" : "已读取浏览器渲染页面，但未识别到可用岗位。可能仍在加载、页面结构变化或验证界面未识别；这不能证明已登录，也不代表没有岗位。请检查 botjob 专用窗口，不要仅因解析失败反复扫码。",
+        message: empty ? "网站明确显示暂无搜索结果。" : "已读取浏览器渲染页面，但未识别到可用岗位。可能仍在加载、页面结构变化或验证界面未识别；这不能证明已登录，也不代表没有岗位。请检查 botjob 浏览器窗口，不要仅因解析失败反复扫码。",
         listings: [], detailErrors: [], diagnostics };
     }
     if (

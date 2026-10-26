@@ -7,7 +7,7 @@ import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createBotjobServer } from "../mcp/server.js";
 import { createBrowserAccess } from "../bot/lib/boards/browser.js";
 
-test("browser reads reuse the opened profile and missing/closed sessions ask for login", async () => {
+test("one shared browser window serves every board and relaunches from the saved profile", async () => {
   let launches = 0;
   let onClose = () => {};
   let url = "";
@@ -20,22 +20,25 @@ test("browser reads reuse the opened profile and missing/closed sessions ask for
   const access = createBrowserAccess(async () => {
     launches++;
     return { pages: () => [fakePage()], newPage: async () => fakePage(), on: (_: string, fn: () => void) => { onClose = fn; }, close: async () => onClose() } as unknown as BrowserContext;
-  }, async () => ({ jobs: [], diagnostics: { mode: "browser", state: "timeout", pageKind: "detail", elapsedMs: 0, cardCount: 0, parsedCount: 0 } }));
+  }, async () => ({ jobs: [], diagnostics: { mode: "browser", state: "timeout", pageKind: "detail", elapsedMs: 0, cardCount: 0, parsedCount: 0 } }),
+  () => ({ name: "Google Chrome" }));
   const read = access.reader("liepin");
   const target = "https://www.liepin.com/job/123.shtml";
-  const absent = await read(target);
-  assert.equal("status" in absent && absent.status, 401);
-  assert.equal(launches, 0);
   await assert.rejects(access.open("liepin", "https://example.org/"));
-  await access.open("liepin");
+  assert.equal(launches, 0);
+  const opened = await access.open("liepin");
+  assert.equal(opened.browser, "Google Chrome");
+  assert.match(opened.message, /Google Chrome/);
+  await access.open("zhilian");
+  assert.equal(launches, 1);
   const result = await read(target);
   assert.equal("body" in result && result.body, "authenticated job page");
   assert.equal(reads, 1);
-  await access.open("liepin");
-  assert.equal(launches, 1);
   await access.close();
-  const closed = await read(target);
-  assert.equal("status" in closed && closed.status, 401);
+  // A restarted session reuses the persistent profile instead of demanding a new login window.
+  const again = await read(target);
+  assert.equal("body" in again && again.body, "authenticated job page");
+  assert.equal(launches, 2);
 });
 
 for (const answer of ["accept", "decline", "unsupported"] as const) {

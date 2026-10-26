@@ -34,11 +34,13 @@ npm ci
 node bin/botjob-mcp.js --check
 ```
 
-使用浏览器功能前安装 Chromium：
+登录搜索和一键投递会打开**系统默认浏览器**（Chrome、Edge、Brave 等 Chromium 内核浏览器）。默认浏览器是 Firefox 或 Safari 时无法自动操作，会改用 Edge（Windows）或 Chrome。电脑上没有这些浏览器时，再安装 botjob 自带的 Chromium：
 
 ```bash
 npx playwright install chromium
 ```
+
+也可以用环境变量 `BOTJOB_BROWSER` 指定：`chrome`、`msedge`、`bundled`（自带 Chromium）或浏览器可执行文件路径。
 
 ### 2. 接入 AI 客户端
 
@@ -79,7 +81,7 @@ npx playwright install chromium
 - `pendingEmployerReview` 单独保留公司性质或名称待核实的记录，不计入推荐结果，也不自动进入候选池。核实前不推荐。
 - 网站要求登录或验证时返回具体原因，不编造职位、不绕过校验。
 
-登录流程通过 `open_job_login` 打开运行 MCP 的电脑上的 **botjob 专用浏览器窗口**，由用户自行登录。日常 Chrome/Edge 的登录状态不会共享到这个窗口，智联和猎聘也需要分别登录。支持 MCP elicitation 的客户端会显示完成提示；否则在聊天中等待用户确认，再保持窗口打开，用 `accessMode: "browser"` 继续搜索。电脑浏览器的登录状态不会自动同步到云端。
+登录流程通过 `open_job_login` 在运行 MCP 的电脑上用**系统默认浏览器**打开一个 botjob 窗口，由用户自行登录。智联和猎聘在同一窗口的不同标签页。这个窗口使用独立的登录记录：平时浏览器里的登录不会带过来，但登录一次后会被记住，MCP 重启后搜索也会直接复用，不需要再打开登录窗口。支持 MCP elicitation 的客户端会显示完成提示；否则在聊天中等待用户确认，再保持窗口打开，用 `accessMode: "browser"` 继续搜索。电脑浏览器的登录状态不会自动同步到云端。
 
 浏览器模式等待岗位 DOM 出现并短暂稳定（最多等待 10 秒），直接读取职位卡片与 JD，再与 HTML/结构化数据按岗位链接合并。它支持异步渲染，不以网络空闲作为读取完成的判断。站点更换选择器、加载超时或未识别的验证页面仍可能失败，不能保证所有页面版本都兼容。
 
@@ -87,7 +89,7 @@ npx playwright install chromium
 
 | 返回原因 | 含义与处理 |
 | --- | --- |
-| `login_required` | 有明确登录限制；在对应站点的 botjob 专用窗口登录 |
+| `login_required` | 有明确登录限制；在 botjob 窗口中对应站点的标签页登录 |
 | `render_timeout` | 等待后仍未识别到可用岗位；检查窗口内页面、网络或结构变化，不能据此判断登录成功或岗位为空 |
 | `parse_error` | 页面内容与解析器不匹配；保留脱敏错误信息用于修复，不要反复扫码 |
 | `empty` | 网站明确显示无结果，或已读取候选经过时间/公司规则后没有合格岗位；结合排除计数判断 |
@@ -141,7 +143,7 @@ npm run apply:local -- --pack /绝对路径/投递包.json
 
 ## 数据与运行环境
 
-简历和求职进度默认保存在 `~/.botjob/data/`，可通过 `BOTJOB_HOME` 指定目录。登录搜索与一键投递的浏览器会话保存在 `<BOTJOB_HOME>/search-browser/<board>`；手动投递脚本默认使用 `~/.botjob/browser-profile`，两者的登录状态独立。
+简历和求职进度默认保存在 `~/.botjob/data/`，可通过 `BOTJOB_HOME` 指定目录。登录搜索与一键投递的浏览器会话保存在 `<BOTJOB_HOME>/search-browser/shared`（旧版本按站点分目录，升级后需重新登录一次）；手动投递脚本默认使用 `~/.botjob/browser-profile`，两者的登录状态独立。
 
 浏览器会话含账号登录信息，不要提交到 Git 或分享。工具不会要求用户在聊天中提供密码、验证码或 Cookie。简历会交给所选 AI 客户端分析，其模型服务的数据处理方式取决于客户端配置；本地保存不代表简历内容完全不离开电脑。
 
