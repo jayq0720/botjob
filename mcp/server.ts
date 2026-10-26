@@ -238,7 +238,9 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
       // The address stays out of the reply: the click on that page is the user's own confirmation.
       return { opened: true, jobCount: total, message: `已在系统默认浏览器打开岗位列表（${total} 个岗位）。请在页面勾选岗位，点「一键投递所选岗位」并确认。投递在 botjob 登录窗口进行，遇到登录、验证码或补填会暂停。` };
     } catch {
-      return { opened: false, jobCount: total, url, message: "无法自动打开浏览器。请用户本人在电脑浏览器打开这个本机地址；仅限本机访问。" };
+      // stderr only. The reply must not carry the token, or the model can POST /api/apply itself.
+      process.stderr.write(`botjob: 无法自动打开岗位列表。请用户本人在本机浏览器打开：\n${url}\n`);
+      return { opened: false, jobCount: total, message: "无法自动打开浏览器。地址已写到运行 botjob 的终端，请用户本人复制打开。助手不要代为访问该页面。" };
     }
   }));
 

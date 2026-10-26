@@ -120,12 +120,13 @@ export function createReviewServer(ctx: () => ActionContext, driver: DeliveryDri
       if (req.method === "POST" && route === "/api/apply") {
         // A JSON content type forces a CORS preflight, so other sites cannot post here blindly.
         if (!req.headers["content-type"]?.startsWith("application/json") || req.headers.origin !== `http://127.0.0.1:${port}`) return send(res, 403, { error: "forbidden" });
+        // Set the flag before any await. Two requests can otherwise both pass the check.
         if (running) return send(res, 409, { error: "已有投递在进行，请等待完成。" });
-        const body = await readJson(req) as { jobIds?: unknown };
-        const jobIds = Array.isArray(body.jobIds) ? body.jobIds.filter((id): id is string => typeof id === "string") : [];
         running = true;
         lastResult = undefined;
         try {
+          const body = await readJson(req) as { jobIds?: unknown };
+          const jobIds = Array.isArray(body.jobIds) ? body.jobIds.filter((id): id is string => typeof id === "string") : [];
           return send(res, 202, await applyFromReview(ctx(), jobIds, driver, result => { lastResult = result; running = false; }));
         } catch (error) { running = false; throw error; }
       }

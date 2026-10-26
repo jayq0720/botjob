@@ -64,3 +64,57 @@ test("job list page shows summaries and its button queues and delivers only the 
     assert.equal(after.jobs.find(row => row.id === "2")!.blocked, "已投递");
   } finally { await client.close(); await server.closeReview(); await server.close(); await rm(home, { recursive: true, force: true }); }
 });
+
+test("open_job_list failure does not return the page address or its token", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "botjob-review-"));
+  const ctx = { ...mcpActionContext(home), offline: false };
+  let secret = "";
+  const server = createBotjobServer({ actionContext: ctx, openUrl: async url => { secret = url; throw new Error("browser failed " + url); } });
+  const client = new Client({ name: "review-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  const written: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => { written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stderr.write;
+  try {
+    const result = await client.callTool({ name: "open_job_list", arguments: {} });
+    const data = result.structuredContent as { opened: boolean; url?: string };
+    const token = new URL(secret).pathname.split("/").filter(Boolean)[0];
+    const dumped = JSON.stringify(result);
+    assert.equal(data.opened, false);
+    assert.equal(Object.hasOwn(data, "url"), false);
+    assert.equal(dumped.includes(secret), false);
+    assert.equal(dumped.includes(token), false);
+    assert.match(written.join(""), new RegExp(token));
+  } finally {
+    process.stderr.write = original;
+    await client.close(); await server.closeReview(); await server.close(); await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("two concurrent apply posts accept only one", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "botjob-review-"));
+  const ctx = { ...mcpActionContext(home), offline: false };
+  await ctx.store.put(scoredJobsKey(ctx.sessionId), [job("1"), job("2")]);
+  let opened = "";
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const server = createBotjobServer({ actionContext: ctx, openUrl: async url => { opened = url; },
+    deliveryDriver: async (_app, beforeClick) => { await beforeClick(); await hold; return { outcome: "submitted", message: "成功", evidence: "投递成功" }; } });
+  const client = new Client({ name: "review-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  try {
+    await client.callTool({ name: "open_job_list", arguments: {} });
+    const origin = new URL(opened).origin;
+    const post = (body: string) => fetch(opened + "api/apply", { method: "POST", headers: { "content-type": "application/json", origin }, body });
+    const bad = await post("{");
+    assert.equal(bad.status, 400);
+    const [left, right] = await Promise.all([post(JSON.stringify({ jobIds: ["2"] })), post(JSON.stringify({ jobIds: ["2"] }))]);
+    assert.deepEqual([left.status, right.status].sort(), [202, 409]);
+  } finally {
+    release();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await client.close(); await server.closeReview(); await server.close(); await rm(home, { recursive: true, force: true });
+  }
+});
