@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { fetchText } from "../bot/lib/boards/fetch.js";
+import { fetchText, MAX_BODY_BYTES } from "../bot/lib/boards/fetch.js";
 
 const START = "https://www.zhaopin.com/jobdetail/start.htm";
 
@@ -80,9 +80,9 @@ describe("fetchText allowlist and body cap", { concurrency: 1 }, () => {
     });
   });
 
-  test("stops a chunked body just past 2MB when Content-Length is absent", async () => {
+  test("stops a chunked body just past 8MB when Content-Length is absent", async () => {
     const chunk = 64 * 1024;
-    const total = 5_000_000;
+    const total = 12_000_000;
     let pulled = 0;
     let cancelled = false;
     await withFetch(async (_input, init) => {
@@ -106,14 +106,14 @@ describe("fetchText allowlist and body cap", { concurrency: 1 }, () => {
       const result = await fetchText(START);
       assert.ok("error" in result);
       if (!("error" in result)) return;
-      assert.match(result.error, /2MB/);
+      assert.match(result.error, /8MB/);
       assert.equal(cancelled, true);
-      assert.ok(pulled > 2_000_000, `pulled ${pulled}`);
-      assert.ok(pulled < 2_000_000 + chunk * 2, `pulled ${pulled}`);
+      assert.ok(pulled > MAX_BODY_BYTES, `pulled ${pulled}`);
+      assert.ok(pulled < MAX_BODY_BYTES + chunk * 2, `pulled ${pulled}`);
     });
   });
 
-  test("rejects Content-Length over 2MB before reading the body", async () => {
+  test("rejects Content-Length over 8MB before reading the body", async () => {
     let read = false;
     await withFetch(async (_input, init) => {
       assert.equal(init?.redirect, "manual");
@@ -121,7 +121,7 @@ describe("fetchText allowlist and body cap", { concurrency: 1 }, () => {
         status: 200,
         headers: new Headers({
           "content-type": "text/html",
-          "content-length": String(3_000_000),
+          "content-length": String(9_000_000),
         }),
         body: {
           getReader() {
@@ -150,7 +150,7 @@ describe("fetchText allowlist and body cap", { concurrency: 1 }, () => {
     });
     const response = new Response(stream, {
       status: 200,
-      headers: { "content-type": "text/html", "content-length": String(3_000_000) },
+      headers: { "content-type": "text/html", "content-length": String(9_000_000) },
     });
     await Promise.resolve();
     const baseline = pulls;

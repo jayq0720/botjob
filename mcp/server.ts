@@ -25,6 +25,9 @@ import {
   searchJobs,
 } from "../bot/lib/actions.js";
 import { jobUrlAllowed } from "../bot/lib/jd.js";
+import { openInDefaultBrowser } from "../bot/lib/boards/system-browser.js";
+import { createReviewServer } from "../bot/lib/review/server.js";
+import { scoredJobsKey, type JobListing } from "../bot/lib/store.js";
 import { mcpActionContext } from "../bot/lib/state-store.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,7 +35,7 @@ const version: string = JSON.parse(readFileSync(path.join(root, "package.json"),
 const skillPath = path.join(root, "bot/skills/job-hunt/SKILL.md");
 
 const INSTRUCTIONS = [
-  "botjob 是本机求职助手，只处理智联、猎聘 的 https 链接。",
+  "botjob 是本机求职助手，只处理智联、猎聘、前程无忧的 https 链接。",
   "每次开始先调用 get_workspace 恢复进度；用 list_jobs 读取候选池，避免重复索要简历或丢失之前保存的岗位。",
   "顺序：save_resume → save_resume_profile → search_jobs 或 score_job → 你来写打招呼语和求职信 → save_cover_letter → queue_apply → apply_jobs 预览并一次确认整批后投递；手动路径为 approve_apply → export_apply_pack。",
   "不要编造岗位。不要改已批准话术。投递优先使用 apply_jobs：一次确认整批岗位后在本机执行；也可使用 localCommand 手动模式。遇到搜索 userActions 登录提示时调用 open_job_login，让用户自己登录，再以 accessMode=browser 继续。",
@@ -55,7 +58,7 @@ BDK 的 queue_apply 自带审批卡片。这个 stdio 服务器没有审批卡�
 5. 手动模式把 localCommand 给用户逐条操作。使用一键投递时，queue_apply 后直接 apply_jobs 预览并一次确认整批，无需先 approve_apply 或导出。
 `;
 
-const boardSchema = z.enum(["zhilian", "liepin"]);
+const boardSchema = z.enum(["zhilian", "liepin", "job51"]);
 
 const saveResumeSchema = z
   .object({
@@ -117,6 +120,10 @@ const searchSchema = z.object({
     .boolean()
     .optional()
     .describe("false 时只生成搜索链接，不访问招聘网站。默认会尝试抓取公开页面。"),
+  retryBlocked: z
+    .boolean()
+    .optional()
+    .describe("站点出现验证码、滑块或拦截后，botjob 30 分钟内不再自动访问该站。只有用户说已在 botjob 窗口完成验证并明确要求重试时才设为 true。"),
 });
 
 const scoreSchema = z
@@ -127,7 +134,7 @@ const scoreSchema = z
       .optional()
       .describe("已经拿到的岗位详情 HTML。提供时只解析这份 HTML，不访问网络。"),
     url: z.string().optional().describe("岗位 https 链接，域名必须属于对应招聘站"),
-    board: boardSchema.optional().describe("zhilian 或 liepin。链接能判断时可以省略。"),
+    board: boardSchema.optional().describe("zhilian、liepin 或 job51。链接能判断时可以省略。"),
     title: z.string().optional(),
     company: z.string().optional(),
     city: z.string().optional(),
@@ -156,7 +163,7 @@ const queueJobSchema = z
   })
   .refine((job) => jobUrlAllowed(job.url, job.board), {
     message:
-      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com），且域名与 board 一致。",
+      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com、51job.com），且域名与 board 一致。",
   });
 
 const READ = {
@@ -181,12 +188,13 @@ const REPLACE = {
 
 type ToolExtra = RequestHandlerExtra<never, never>;
 
-export function createBotjobServer(options: { openLogin?: typeof browserAccess.open; deliveryDriver?: DeliveryDriver; actionContext?: ReturnType<typeof mcpActionContext> } = {}): McpServer {
+export function createBotjobServer(options: { openLogin?: typeof browserAccess.open; deliveryDriver?: DeliveryDriver; actionContext?: ReturnType<typeof mcpActionContext>; openUrl?: (url: string) => Promise<unknown> } = {}): McpServer & { closeReview(): Promise<void> } {
   const server = new McpServer(
     { name: "botjob", version },
     { instructions: INSTRUCTIONS },
   );
   const ctx = () => options.actionContext ?? mcpActionContext();
+  const review = createReviewServer(ctx, options.deliveryDriver ?? browserDelivery);
 
   server.registerTool("get_workspace", {
     title: "恢复求职进度",
@@ -205,6 +213,40 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     }),
     annotations: READ,
   }, async (args) => run(() => listJobs(ctx(), args)));
+
+  server.registerTool("open_job_list", {
+    title: "打开岗位列表（一键投递按钮）",
+    description: "在用户电脑的系统默认浏览器打开本机岗位列表页：每个已保存岗位显示岗位简介、公司简介、匹配分和投递状态，用户勾选后点「一键投递所选岗位」并在弹窗确认，botjob 随即在登录窗口依次投递。search_jobs 后调用；先为每个岗位写 jobSummary（两三句概括职责与硬性要求）和 companySummary（一两句公司概况，只用 companyIntro/行业/规模等已有字段，未提供就省略），一并传入。页面上的点击就是用户确认，你不要替用户访问或操作该页面。",
+    inputSchema: z.object({
+      summaries: z.array(z.object({
+        jobId: z.string(),
+        jobSummary: z.string().max(300).optional(),
+        companySummary: z.string().max(300).optional(),
+      })).max(40).optional(),
+    }),
+    annotations: { ...ADD, idempotentHint: true, openWorldHint: true },
+  }, async (args) => run(async () => {
+    const c = ctx();
+    if (args.summaries?.length) {
+      await c.store.update(scoredJobsKey(c.sessionId), current => ({
+        value: ((current ?? []) as JobListing[]).map(job => {
+          const row = args.summaries!.find(item => item.jobId === job.id);
+          return row ? { ...job, jobSummary: row.jobSummary?.trim() || job.jobSummary, companySummary: row.companySummary?.trim() || job.companySummary } : job;
+        }), result: undefined,
+      }));
+    }
+    const { total } = await listJobs(c, { limit: 40 });
+    const url = await review.url();
+    try {
+      await (options.openUrl ?? openInDefaultBrowser)(url);
+      // The address stays out of the reply: the click on that page is the user's own confirmation.
+      return { opened: true, jobCount: total, message: `已在系统默认浏览器打开岗位列表（${total} 个岗位）。请在页面勾选岗位，点「一键投递所选岗位」并确认。投递在 botjob 登录窗口进行，遇到登录、验证码或补填会暂停。` };
+    } catch {
+      // stderr only. The reply must not carry the token, or the model can POST /api/apply itself.
+      process.stderr.write(`botjob: 无法自动打开岗位列表。请用户本人在本机浏览器打开：\n${url}\n`);
+      return { opened: false, jobCount: total, message: "无法自动打开浏览器。地址已写到运行 botjob 的终端，请用户本人复制打开。助手不要代为访问该页面。" };
+    }
+  }));
 
   server.registerTool(
     "save_resume",
@@ -248,7 +290,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "搜索岗位",
       description:
-        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
+        "按已保存画像生成智联、猎聘、前程无忧的搜索链接（前程无忧需 accessMode=browser）。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。为减少对招聘站的访问，每站逐页读取并随机间隔 3–6 秒，详情页每站最多 5 个并缓存 24 小时；遇到验证码、滑块或拦截立即停止该站，并在 30 分钟内不再自动访问，除非用户完成验证后明确要求重试（retryBlocked=true）。猎聘在浏览器模式下也读取公开页面。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
       inputSchema: searchSchema,
       annotations: {
         readOnlyHint: false,
@@ -262,7 +304,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
 
   server.registerTool("open_job_login", {
     title: "登录招聘网站后继续",
-    description: "搜索遇到登录限制时打开本机独立浏览器，让用户自己登录。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
+    description: "搜索遇到登录限制时用系统默认浏览器打开 botjob 窗口（Firefox/Safari 改用 Chrome/Edge），让用户自己登录；登录记录保存在本机，下次自动复用。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
     inputSchema: z.object({ board: boardSchema, url: z.string().optional().describe("该站搜索链接或受限岗位链接") }),
     annotations: { ...ADD, openWorldHint: true },
   }, async (args, extra) => run(async () => {
@@ -323,7 +365,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "加入投递队列",
       description:
-        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘 的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来一键模式调用 apply_jobs 预览并确认整批；手动模式让用户确认，再调用 approve_apply。",
+        "把岗位放进投递队列，新记录状态是 queued，还没有批准。同一岗位按规范化 URL 去重（去掉查询参数和 fragment、去掉末尾 /、主机小写）：queued、approved、submitted_manual 返回原记录，不新增，也不改话术。failed 或 skipped 会另开一条 queued，使用最新话术，并需要重新审批；旧记录保留。只接受智联、猎聘、前程无忧的 https 链接，且域名必须和 board 一致。不会登录、不会打开浏览器、不会代投。接下来一键模式调用 apply_jobs 预览并确认整批；手动模式让用户确认，再调用 approve_apply。",
       inputSchema: z.object({
         jobs: z.array(queueJobSchema).min(1).max(10),
         coverNote: z.string().optional().describe("还没单独保存话术时的简短备注"),
@@ -536,7 +578,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     }),
   );
 
-  return server;
+  return Object.assign(server, { closeReview: () => review.close() });
 }
 
 function readSkill(): string {

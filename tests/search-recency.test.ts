@@ -53,7 +53,7 @@ test("retired sites cannot be searched, fetched or opened for application", asyn
   const original=globalThis.fetch;
   globalThis.fetch=async()=>{throw new Error("unexpected network call");};
   try {
-    for(const [board,url] of [["boss","https://www.zhipin.com/job_detail/x.html"],["job51","https://jobs.51job.com/shanghai/x.html"]]) {
+    for(const [board,url] of [["boss","https://www.zhipin.com/job_detail/x.html"]]) {
       assert.equal(boardFromUrl(url),undefined);
       assert.ok("error" in await fetchText(url));
       assert.throws(()=>assertApplyTarget({board,url},"goto"));

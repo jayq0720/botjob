@@ -46,7 +46,7 @@ export async function queueApply(
   for (const job of input.jobs) {
     if (!jobUrlAllowed(job.url, job.board)) {
       throw new Error(
-        "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com），且域名与 board 一致。",
+        "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com、51job.com），且域名与 board 一致。",
       );
     }
   }

@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildSearchPacks } from "../bot/lib/boards/index.js";
 
-test("search URLs for two boards", () => {
+test("search URLs for every supported board", () => {
   const packs = buildSearchPacks({
     titles: ["高级前端工程师"],
     keywords: ["React"],
     cities: ["上海"],
   });
   const byBoard = Object.fromEntries(packs.map((pack) => [pack.board, pack.searchUrl]));
-  assert.equal(packs.length, 2);
+  assert.equal(packs.length, 3);
+  assert.equal(new URL(byBoard.job51).searchParams.get("jobArea"), "020000");
   assert.match(byBoard.zhilian, /^https:\/\/sou\.zhaopin\.com\/\?/);
   assert.match(byBoard.zhilian, /kw=/);
   assert.equal(new URL(byBoard.zhilian).searchParams.get("jl"), "538");

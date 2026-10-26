@@ -17,5 +17,5 @@ process.on("unhandledRejection", (reason) => {
 const server = createBotjobServer();
 const transport = new StdioServerTransport();
 await server.connect(transport);
-server.server.onclose = () => { void browserAccess.close(); };
+server.server.onclose = () => { void browserAccess.close(); void server.closeReview(); };
 process.stderr.write("botjob-mcp stdio 已启动。日志只写 stderr。\n");
