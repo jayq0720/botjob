@@ -20,6 +20,34 @@ export const JOB51_AREA: Record<string, string> = {
   长沙: "190200",
 };
 
+/** City path segment of jobs.51job.com detail URLs (e.g. /shanghai/170138012.html). */
+export const JOB51_CITY_SLUG: Record<string, string> = {
+  北京: "beijing",
+  上海: "shanghai",
+  广州: "guangzhou",
+  深圳: "shenzhen",
+  天津: "tianjin",
+  重庆: "chongqing",
+  南京: "nanjing",
+  苏州: "suzhou",
+  杭州: "hangzhou",
+  宁波: "ningbo",
+  成都: "chengdu",
+  武汉: "wuhan",
+  西安: "xian",
+  厦门: "xiamen",
+  郑州: "zhengzhou",
+  长沙: "changsha",
+};
+
+/** Search cards link only the company; the job page is jobs.51job.com/<city>/<jobId>.html. */
+export function job51DetailUrl(jobId: unknown, area: unknown): string | undefined {
+  const id = typeof jobId === "string" || typeof jobId === "number" ? String(jobId).trim() : "";
+  const city = typeof area === "string" ? area.split(/[-·\s]/)[0].replace(/市$/, "") : "";
+  const slug = JOB51_CITY_SLUG[city];
+  return /^\d+$/.test(id) && slug ? `https://jobs.51job.com/${slug}/${id}.html` : undefined;
+}
+
 /** Build a 前程无忧 search deep link. The result list renders in the browser, so it needs accessMode=browser. */
 export function job51Search(criteria: SearchCriteria): BoardSearchPack {
   const query = criteria.titles[0] || criteria.keywords.slice(0, 3).join(" ") || "人力资源";

@@ -10,6 +10,8 @@ import { scoreJob as scoreAgainstProfile } from "../score.js";
 import type { ActionContext } from "../state-store.js";
 import { resumeProfileKey, scoredJobsKey, type JobListing, type ResumeProfile } from "../store.js";
 
+const LIEPIN_PUBLIC_NOTE = "猎聘在 botjob 浏览器窗口里会被站点脚本清空页面，本次改用未登录的公开页面读取猎聘。";
+
 export type SearchJobsInput = {
   boards?: BoardId[];
   extraKeywords?: string[];
@@ -85,7 +87,12 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
     };
   }
 
-  const reports = await Promise.all(selected.map((board) => fetchBoard(board, criteria, { read: input.accessMode === "browser" ? browserAccess.reader(board) : undefined, limit: input.limitPerBoard })));
+  const reports = await Promise.all(selected.map(async (board) => {
+    // 猎聘's page script blanks itself in an automated browser window, so 猎聘 always uses public pages.
+    const browser = input.accessMode === "browser" && board !== "liepin";
+    const report = await fetchBoard(board, criteria, { read: browser ? browserAccess.reader(board) : undefined, limit: input.limitPerBoard });
+    return input.accessMode === "browser" && board === "liepin" ? { ...report, message: `${LIEPIN_PUBLIC_NOTE}${report.message}` } : report;
+  }));
   const listings = reports.flatMap((report) =>
     report.listings.flatMap((posting) => {
       try {

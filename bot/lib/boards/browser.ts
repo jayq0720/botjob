@@ -1,10 +1,12 @@
 import path from "node:path";
+import { readlinkSync } from "node:fs";
+import { hostname } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type { BrowserContext, Page } from "playwright";
 import { botjobHome } from "../state-store.js";
 import { jobUrlAllowed } from "../jd.js";
 import { SUPPORTED_BOARDS, type BoardId } from "./types.js";
-import type { PageReader } from "./fetch.js";
+import { MAX_BODY_BYTES, type PageReader } from "./fetch.js";
 import { readRenderedJobs } from "./rendered.js";
 import { resolveLoginBrowser } from "./system-browser.js";
 
@@ -61,7 +63,7 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
         const rendered = await render(page, board);
         if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
         const body = await page.content();
-        if (Buffer.byteLength(body) > 2_000_000) return { error: "响应体超过 2MB。" };
+        if (Buffer.byteLength(body) > MAX_BODY_BYTES) return { error: "响应体超过 8MB。" };
         return { status: response?.status() ?? 200, finalUrl: page.url(), body, contentType: "text/html", rendered };
       } catch {
         return { error: "浏览器读取失败。请检查登录窗口是否仍然打开，再重试。" };
@@ -77,6 +79,20 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
   } };
 }
 
+/** PID of a live browser on this machine holding the profile's Chromium SingletonLock ("host-pid"), if any. */
+export function profileLockOwner(profile: string, host = hostname()): number | undefined {
+  let target: string;
+  try { target = readlinkSync(path.join(profile, "SingletonLock")); } catch { return undefined; }
+  const match = target.match(/^(.*)-(\d+)$/);
+  if (!match || match[1] !== host) return undefined;
+  const pid = Number(match[2]);
+  try { process.kill(pid, 0); return pid; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined; }
+}
+
+export function profileLockedMessage(pid: number): string {
+  return `botjob 的登录浏览器窗口已经在运行（浏览器进程 ${pid}），可能是另一个 AI 客户端里的 botjob 或之前没有退出的 botjob 打开的。同一份登录记录一次只能被一个窗口使用：请关闭那个 botjob 浏览器窗口（或退出占用它的 AI 客户端）后重试。登录状态保存在 botjob 自己的配置里，关闭窗口不会丢失。`;
+}
+
 type LaunchInfo = { name: string; note?: string };
 let launched: LaunchInfo | undefined;
 
@@ -87,6 +103,9 @@ export const browserAccess = createBrowserAccess(async () => {
   const { chromium } = await import("playwright");
   const profile = path.join(botjobHome(), "search-browser", "shared");
   await mkdir(profile, { recursive: true, mode: 0o700 });
+  // Another botjob window already holds this profile; a second launch would fail, and bundled Chromium cannot share it either.
+  const owner = profileLockOwner(profile);
+  if (owner) throw new Error(profileLockedMessage(owner));
   const { browser, note } = await resolveLoginBrowser();
   const options = { headless: false, locale: "zh-CN", viewport: null } as const;
   if (browser) {
@@ -94,7 +113,11 @@ export const browserAccess = createBrowserAccess(async () => {
       const context = await chromium.launchPersistentContext(profile, { ...options, executablePath: browser.executablePath, channel: browser.channel });
       launched = { name: browser.name, note };
       return context;
-    } catch { /* Fall through to the bundled Chromium below. */ }
+    } catch {
+      const holder = profileLockOwner(profile);
+      if (holder) throw new Error(profileLockedMessage(holder));
+      /* Fall through to the bundled Chromium below. */
+    }
   }
   try {
     const context = await chromium.launchPersistentContext(profile, options);

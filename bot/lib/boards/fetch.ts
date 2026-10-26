@@ -46,9 +46,11 @@ const UA =
 const MAX_LISTINGS = 5;
 const MAX_DETAILS = 5;
 const MAX_CANDIDATES = 20;
+/** Target titles searched per board; each is one more search page load. */
+const MAX_TITLES = 3;
 const MAX_REDIRECTS = 5;
-/** Same cap the old buffered read used, in decimal bytes. */
-const MAX_BODY_BYTES = 2_000_000;
+/** Page size cap in decimal bytes. 智联 detail pages run near 3MB, so 2MB rejected every one. */
+export const MAX_BODY_BYTES = 8_000_000;
 
 export function classifyFetch(input: {
   status: number;
@@ -83,14 +85,14 @@ export function classifyFetch(input: {
     };
   }
   if (
-    /Security Verification|TencentEOCaptcha|TEOCaptcha|aliyun_waf|请勾选下方复选框/i.test(
+    /Security Verification|TencentEOCaptcha|TEOCaptcha|aliyun_waf|请勾选下方复选框|<title>[^<]*(?:滑动验证|访问验证)/i.test(
       body,
-    )
+    ) || /请按住滑块|拖动到最右边/.test(visibleText)
   ) {
     return {
       blocked: true,
       reason: "captcha",
-      message: "页面要求人机验证或验证码。不会代为勾选或绕过。",
+      message: "页面要求人机验证、验证码或滑块验证。不会代为勾选、拖动或绕过；请在 botjob 浏览器窗口里自己完成后再搜索。",
     };
   }
   if (/您的环境存在异常|访问行为异常|环境异常/.test(body)) {
@@ -170,7 +172,7 @@ async function readLimitedBody(response: Response): Promise<string> {
       if (!value?.byteLength) continue;
       if (total + value.byteLength > MAX_BODY_BYTES) {
         await reader.cancel().catch(() => undefined);
-        throw new Error("响应体超过 2MB，已中止读取。");
+        throw new Error("响应体超过 8MB，已中止读取。");
       }
       chunks.push(value);
       total += value.byteLength;
@@ -220,7 +222,7 @@ export async function fetchText(url: string): Promise<Fetched | { error: string 
       const length = declaredLength(response);
       if (length !== undefined && length > MAX_BODY_BYTES) {
         await cancelBody(response);
-        return { error: `响应体超过 2MB（Content-Length: ${length}）。` };
+        return { error: `响应体超过 8MB（Content-Length: ${length}）。` };
       }
       const body = await readLimitedBody(response);
       return {
@@ -248,31 +250,41 @@ function searchPack(board: BoardId, criteria: SearchCriteria) {
   }
 }
 
-export async function fetchBoard(
-  board: BoardId,
-  criteria: SearchCriteria,
-  options: { read?: PageReader; limit?: number } = {},
-): Promise<BoardFetchReport> {
-  const read = options.read ?? fetchText;
-  const limit = Math.max(1, Math.min(20, options.limit ?? MAX_LISTINGS));
-  const now = Date.now();
-  const pack = searchPack(board, criteria);
-  if (board === "job51" && !options.read) {
-    // we.51job.com search is a script-rendered shell; a plain fetch can never contain jobs.
-    return { board, ok: false, reason: "parse_error", message: "前程无忧的搜索结果由页面脚本加载，请用 accessMode=\"browser\" 重试（会打开 botjob 浏览器窗口）。", listings: [], detailErrors: [] };
+type SearchPage = {
+  listings: JobPosting[];
+  userActions: NonNullable<BoardFetchReport["userActions"]>;
+  blocked: boolean;
+  diagnostics?: RenderDiagnostics;
+  /** The report to return when no search for this board found a job. */
+  failure?: BoardFetchReport;
+};
+
+/** Round-robin across title searches so later titles are not cut off by MAX_CANDIDATES; first URL wins. */
+function interleave(lists: JobPosting[][]): JobPosting[] {
+  const seen = new Set<string>();
+  const merged: JobPosting[] = [];
+  for (let index = 0; lists.some(list => index < list.length); index++) {
+    for (const list of lists) {
+      const job = list[index];
+      if (!job) continue;
+      const key = canonicalJobUrl(job.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(job);
+    }
   }
+  return merged;
+}
+
+async function searchOnce(board: BoardId, criteria: SearchCriteria, read: PageReader, browser: boolean, now: number): Promise<SearchPage> {
+  const pack = searchPack(board, criteria);
+  const none = { listings: [], userActions: [], blocked: false };
   const fetched = await read(pack.searchUrl);
   if ("error" in fetched) {
-    return {
-      board,
-      ok: false,
-      reason: "network",
-      message: `抓取搜索页失败：${fetched.error}`,
-      listings: [],
-      detailErrors: [],
-    };
+    return { ...none, failure: { board, ok: false, reason: "network", message: `抓取搜索页失败：${fetched.error}`, listings: [], detailErrors: [] } };
   }
   const gate = classifyFetch(fetched);
+  const diagnostics = fetched.rendered?.diagnostics;
   let listings: JobPosting[] = [];
   const userActions: NonNullable<BoardFetchReport["userActions"]> = gate.blocked && ["login_required", "captcha", "blocked"].includes(gate.reason)
     ? [{ board, reason: gate.reason, url: pack.searchUrl, message: gate.message }] : [];
@@ -285,48 +297,61 @@ export async function fetchBoard(
     }
     listings = mergeRendered(listings, fetched.rendered?.jobs);
   }
+  const page = { listings, userActions, blocked: gate.blocked, diagnostics };
+  if (listings.length > 0) return page;
   let apiFailure: { reason: FetchReason; message: string } | undefined;
-  if (listings.length === 0 && board === "zhilian" && !gate.blocked && !options.read) {
+  if (board === "zhilian" && !gate.blocked && !browser) {
     const api = await fetchJsonApi(board, criteria);
-    if (api.ok) listings = api.jobs;
-    else apiFailure = { reason: api.reason, message: api.message };
+    if (api.ok && api.jobs.length) return { ...page, listings: api.jobs };
+    if (!api.ok) apiFailure = { reason: api.reason, message: api.message };
   }
+  if (gate.blocked) {
+    return { ...page, failure: { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [], userActions, diagnostics } };
+  }
+  if (diagnostics) {
+    const empty = diagnostics.state === "empty";
+    return { ...page, failure: { board, ok: false, reason: empty ? "empty" : diagnostics.cardCount > 0 || diagnostics.state !== "timeout" ? "parse_error" : "render_timeout",
+      message: empty ? "网站明确显示暂无搜索结果。" : "已读取浏览器渲染页面，但未识别到可用岗位。可能仍在加载、页面结构变化或验证界面未识别；这不能证明已登录，也不代表没有岗位。请检查 botjob 浏览器窗口，不要仅因解析失败反复扫码。",
+      listings: [], detailErrors: [], diagnostics } };
+  }
+  if (apiFailure?.reason === "empty" && /jobinfo__name|job-card__|job-card-pc-container|job-card-wrapper/.test(fetched.body)) {
+    return { ...page, failure: { board, ok: false, reason: "parse_error", message: "搜索页里有职位标记，但没有解析出岗位。页面结构可能已变。", listings: [], detailErrors: [] } };
+  }
+  if (apiFailure) {
+    return { ...page, failure: { board, ok: false, reason: apiFailure.reason, message: apiFailure.message, listings: [], detailErrors: [] } };
+  }
+  return { ...page, failure: { board, ok: false, reason: "parse_error", message: "搜索页 HTML 里没有职位卡片。页面可能是前端渲染空壳，或结构已变。", listings: [], detailErrors: [] } };
+}
+
+export async function fetchBoard(
+  board: BoardId,
+  criteria: SearchCriteria,
+  options: { read?: PageReader; limit?: number } = {},
+): Promise<BoardFetchReport> {
+  const read = options.read ?? fetchText;
+  const limit = Math.max(1, Math.min(20, options.limit ?? MAX_LISTINGS));
+  const now = Date.now();
+  if (board === "job51" && !options.read) {
+    // we.51job.com search is a script-rendered shell; a plain fetch can never contain jobs.
+    return { board, ok: false, reason: "parse_error", message: "前程无忧的搜索结果由页面脚本加载，请用 accessMode=\"browser\" 重试（会打开 botjob 浏览器窗口）。", listings: [], detailErrors: [] };
+  }
+  // One search per target title (capped), merged by job URL.
+  const titles = [...new Set(criteria.titles.map(title => title.trim()).filter(Boolean))].slice(0, MAX_TITLES);
+  const searches: SearchPage[] = [];
+  for (const title of titles.length ? titles : [undefined]) {
+    const page = await searchOnce(board, title ? { ...criteria, titles: [title] } : criteria, read, !!options.read, now);
+    searches.push(page);
+    // A login wall, captcha or block stops the remaining searches on this site.
+    if (page.blocked) break;
+  }
+  const listings = interleave(searches.map(page => page.listings));
+  const userActions = searches.flatMap(page => page.userActions);
+  const blocked = searches.some(page => page.blocked);
   if (listings.length === 0) {
-    if (gate.blocked) {
-      return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [], userActions, diagnostics: fetched.rendered?.diagnostics };
-    }
-    if (fetched.rendered) {
-      const diagnostics = fetched.rendered.diagnostics;
-      const empty = diagnostics.state === "empty";
-      return { board, ok: false, reason: empty ? "empty" : diagnostics.cardCount > 0 || diagnostics.state !== "timeout" ? "parse_error" : "render_timeout",
-        message: empty ? "网站明确显示暂无搜索结果。" : "已读取浏览器渲染页面，但未识别到可用岗位。可能仍在加载、页面结构变化或验证界面未识别；这不能证明已登录，也不代表没有岗位。请检查 botjob 浏览器窗口，不要仅因解析失败反复扫码。",
-        listings: [], detailErrors: [], diagnostics };
-    }
-    if (
-      apiFailure?.reason === "empty" &&
-      /jobinfo__name|job-card-pc-container|job-card-wrapper/.test(fetched.body)
-    ) {
-      return {
-        board,
-        ok: false,
-        reason: "parse_error",
-        message: "搜索页里有职位标记，但没有解析出岗位。页面结构可能已变。",
-        listings: [],
-        detailErrors: [],
-      };
-    }
-    if (apiFailure) {
-      return { board, ok: false, reason: apiFailure.reason, message: apiFailure.message, listings: [], detailErrors: [] };
-    }
-    return {
-      board,
-      ok: false,
-      reason: "parse_error",
-      message: "搜索页 HTML 里没有职位卡片。页面可能是前端渲染空壳，或结构已变。",
-      listings: [],
-      detailErrors: [],
-    };
+    const failures = searches.map(page => page.failure!);
+    return failures.find(failure => failure.userActions?.length) ?? failures.find(failure => failure.reason !== "network") ?? failures[0];
   }
+  const diagnostics = searches.find(page => page.diagnostics)?.diagnostics;
   const candidates = listings.slice(0, MAX_CANDIDATES);
   const knownOld = candidates.filter((job) => freshness(job, now) === "old").length;
   const excludedEmployers = { insurance: 0, labor_dispatch: 0 };
@@ -336,7 +361,7 @@ export async function fetchBoard(
     return !reason;
   };
   const eligible = candidates.filter((job) => freshness(job, now) !== "old").filter(allowEmployer);
-  const detailBudget = gate.blocked ? 0 : Math.max(MAX_DETAILS, limit);
+  const detailBudget = blocked ? 0 : Math.max(MAX_DETAILS, limit);
   const { jobs: enriched, detailErrors, detailFailures, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget);
   const jobs = enriched.filter(allowEmployer);
   const timely = jobs.filter((job) => freshness(job, now) === "recent")
@@ -354,7 +379,7 @@ export async function fetchBoard(
     listings: recent,
     detailErrors,
     detailFailures,
-    diagnostics: fetched.rendered?.diagnostics,
+    diagnostics,
     excludedEmployers,
     pendingEmployerReview,
     userActions: [...userActions, ...detailActions],

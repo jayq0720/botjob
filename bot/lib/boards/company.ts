@@ -13,6 +13,15 @@ export function companyTags(text: string | undefined): Pick<CompanyFacts, "compa
   return { companySize: text.match(SIZE)?.[0].replace(/\s+/g, ""), companyStage: text.match(STAGE)?.[0] };
 }
 
+/** A "A轮 · 1000-9999人 · 消费金融、产业互联网平台" tag line: industry is what is left after size, stage and badges. */
+export function companyTagLine(text: string | undefined): Pick<CompanyFacts, "companySize" | "companyStage"> & { companyIndustry?: string } {
+  if (!text) return {};
+  const parts = text.split(/\s*[·•|｜]\s*/).map(part => part.replace(/已审核|已认证/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const industry = [...new Set(parts.filter(part => !SIZE.test(part) && !new RegExp(`^(?:${STAGE.source})$`).test(part))
+    .flatMap(part => part.split("、")))].join("、");
+  return { ...companyTags(text), companyIndustry: industry || undefined };
+}
+
 export function trimIntro(text: string | undefined): string | undefined {
   const clean = text?.replace(/\s+/g, " ").trim();
   if (!clean || clean.length < 15) return undefined;
@@ -24,6 +33,12 @@ function navFragment(text: string): boolean {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean || /[，。；！？、,.!?]/.test(clean)) return false;
   return clean.split(/\s+/).every(part => part.length <= 12);
+}
+
+/** A footer starts its "公司介绍" with a run of short link labels (联系我们 诚聘英才 产品与服务 …). */
+function leadingLinks(text: string): boolean {
+  const parts = text.trim().split(/\s+/).slice(0, 5);
+  return parts.length === 5 && parts.every(part => part.length <= 8 && !/[，。；！？、,.!?]/.test(part));
 }
 
 /** Text after a "公司介绍" heading in a page's plain text, up to the next known section. */
@@ -38,7 +53,9 @@ export function introAfterHeading(plainText: string): string | undefined {
     const between = nextHeading >= 0 && nextHeading < end ? rest.slice(0, nextHeading) : "";
     if (between && (navFragment(between) || between.replace(/\s+/g, "").length < 40)) continue;
     const chunk = rest.slice(0, end);
-    if (navFragment(chunk) || !/[，。；！？、,.!?]/.test(chunk)) continue;
+    // Under 智联's "公司信息" heading the first line is the "未融资 · 1000-9999人 · 行业" tag line, not an intro.
+    const head = chunk.slice(0, 80);
+    if (navFragment(chunk) || leadingLinks(chunk) || (/[·•]/.test(head) && SIZE.test(head)) || !/[，。；！？、,.!?]/.test(chunk)) continue;
     const intro = trimIntro(chunk);
     if (intro && intro.length >= 40) return intro;
   }

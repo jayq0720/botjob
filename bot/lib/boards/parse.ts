@@ -1,4 +1,5 @@
-import { companyTags, introAfterHeading, trimIntro } from "./company.js";
+import { companyTagLine, companyTags, introAfterHeading, trimIntro } from "./company.js";
+import { job51DetailUrl } from "./job51.js";
 import { jobTime, type JobTime } from "./freshness.js";
 import type { BoardId } from "./types.js";
 import { jobUrlAllowed, type JobPosting } from "../jd.js";
@@ -293,6 +294,47 @@ function parseZhilianSearch(html: string, pageUrl: string, now: number): JobPost
       jobs.push(position ? { ...job, ...positionTime(position, now) } : job);
     }
   }
+  return jobs.length ? jobs : parseZhilianJobCards(html, positions, now);
+}
+
+/** Company facts the positionList record states for this job, as one tag line. */
+export function zhilianPositionTags(position: Record<string, unknown>): string {
+  return [asString(position.financingStage), asString(position.companySize), asString(position.industryName), asString(position.property)]
+    .filter(Boolean).join(" · ");
+}
+
+/** Pick the positionList record for a card: same title and company, else the same slot if its title matches. */
+export function zhilianPosition(positions: Record<string, unknown>[], index: number, title: string, company?: string): Record<string, unknown> | undefined {
+  const same = (item: Record<string, unknown> | undefined) => !!item && asString(item.name)?.trim() === title;
+  return positions.find(item => same(item) && (!company || asString(item.companyName)?.trim() === company))
+    ?? (same(positions[index]) ? positions[index] : undefined);
+}
+
+/** www.zhaopin.com/jobs/ (2026): cards carry no job link, so the URL comes from __INITIAL_STATE__.positionList. */
+function parseZhilianJobCards(html: string, positions: Record<string, unknown>[], now: number): JobPosting[] {
+  const jobs: JobPosting[] = [];
+  for (const [index, chunk] of html.split(/class="job-card(?:\s[^"]*)?"/).slice(1).entries()) {
+    const title = chunk.match(/class="vue-clamp__text"[^>]*>([^<]+)</)?.[1] ?? chunk.match(/class="job-card__title-main"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+    const company = anchorFields(chunk.match(/<a\b[^>]*class="job-card__company-name[^"]*"[^>]*>[\s\S]*?<\/a>/)?.[0]).text;
+    const name = title ? plain(title).trim() : undefined;
+    const position = name ? zhilianPosition(positions, index, name, company) : undefined;
+    const url = asString(position?.positionURL) ?? asString(position?.positionUrl);
+    const labels = [...chunk.matchAll(/class="job-card__skill-tag"[^>]*>([^<]*)</g)].map(match => decodeEntities(match[1]).trim());
+    const tagLine = position ? zhilianPositionTags(position) : "";
+    const job = posting({
+      board: "zhilian",
+      title: name,
+      company: company || asString(position?.companyName),
+      companyIndustry: asString(position?.industryName),
+      companyTagText: tagLine || undefined,
+      city: chunk.match(/class="job-card__location"[\s\S]*?<span title="([^"]+)"/)?.[1],
+      salary: visibleSalary(textByClass(chunk, "job-card__salary")),
+      ...pickExpEdu(labels),
+      url,
+      jdStatus: "list_only",
+    });
+    if (job) jobs.push(position ? { ...job, ...positionTime(position, now) } : job);
+  }
   return jobs;
 }
 
@@ -318,15 +360,20 @@ function parseZhilianDetail(html: string, pageUrl: string): JobPosting | undefin
   });
   const expEdu = pickExpEdu(info);
   const city = info.find((item) => item !== expEdu.experience && item !== expEdu.education);
+  // company-info__desc is the "A轮 · 1000-9999人 · 行业" tag line; the intro has its own paragraph.
+  const tagLine = textByClass(html, "company-info__desc");
+  const intro = html.match(/class="[^"]*\bcompany-info__intro\b[^"]*"[^>]*>([\s\S]*?)<\/p>/)?.[1];
   return posting({
     board: "zhilian",
     title,
     company,
+    companyIndustry: companyTagLine(tagLine).companyIndustry,
+    companyTagText: tagLine,
     city,
     salary,
     ...expEdu,
     description: description ? plain(description) : undefined,
-    companyIntro: introAfterHeading(pageText(html)),
+    companyIntro: intro ? plain(intro) : introAfterHeading(pageText(html)),
     url: pageUrl,
   });
 }
@@ -370,9 +417,12 @@ function sensorsData(chunk: string): Record<string, unknown> {
 function parseJob51Search(html: string, pageUrl: string, now: number): JobPosting[] {
   const jobs: JobPosting[] = [];
   for (const chunk of splitChunks(html, 'class="joblist-item"')) {
-    const href = chunk.match(/href="((?:https:)?\/\/jobs\.51job\.com\/[a-z0-9-]+\/\d+\.html)[^"]*"/)?.[1];
-    if (!href) continue;
     const data = sensorsData(chunk);
+    // The last chunk runs to the end of the page, so a link counts only when it carries this card's jobId.
+    const links = [...chunk.matchAll(/href="((?:https:)?\/\/jobs\.51job\.com\/[a-z0-9-]+\/(\d+)\.html)[^"]*"/g)];
+    const id = asString(data.jobId) ?? (typeof data.jobId === "number" ? String(data.jobId) : undefined);
+    const href = (id ? links.find(link => link[2] === id)?.[1] : links[0]?.[1]) ?? job51DetailUrl(data.jobId, data.jobArea);
+    if (!href) continue;
     const labels = [textByClass(chunk, "exp"), textByClass(chunk, "edu"), asString(data.jobYear), asString(data.jobDegree)].filter((item): item is string => !!item);
     const tags = [...chunk.matchAll(/class="[^"]*\bdc\b[^"]*"[^>]*>([^<]+)</g)].map(match => decodeEntities(match[1]).trim());
     const job = posting({
@@ -381,7 +431,7 @@ function parseJob51Search(html: string, pageUrl: string, now: number): JobPostin
       company: textByClass(chunk, "cname") || asString(data.companyName),
       companyIndustry: tags.find(tag => !/\d.*人|公司$|企业$/.test(tag)),
       companyTagText: tags.join(" ") || undefined,
-      city: textByClass(chunk, "area") || asString(data.jobArea),
+      city: asString(data.jobArea) || blockText(chunk, "area"),
       salary: visibleSalary(textByClass(chunk, "sal") || asString(data.jobSalary)),
       ...pickExpEdu(labels),
       url: absUrl(href, pageUrl),

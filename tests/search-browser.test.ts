@@ -6,7 +6,9 @@ import { createBrowserAccess } from "../bot/lib/boards/browser.js";
 import { readRenderedJobs } from "../bot/lib/boards/rendered.js";
 import { fetchBoard, fetchJobUrl } from "../bot/lib/boards/fetch.js";
 
-const executablePath = existsSync(chromium.executablePath()) ? chromium.executablePath() : "/usr/bin/chromium";
+// Playwright's Chromium, else a system Chrome/Edge so these also run on a desktop.
+const executablePath = [chromium.executablePath(), "/usr/bin/chromium",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"].find(file => existsSync(file)) ?? "/usr/bin/chromium";
 const criteria = { titles: ["薪酬经理"], keywords: [], cities: ["上海"] };
 const jd = "负责薪酬核算、绩效方案设计、人力成本预算及员工关系管理。";
 const intro = "示例科技成立于2010年，专注企业人力资源软件，服务超过三千家中大型客户，总部位于上海浦东。";
