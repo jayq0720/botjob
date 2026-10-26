@@ -1,7 +1,8 @@
 import { browserAccess } from "../boards/browser.js";
 import { SEARCH_MAX_AGE_DAYS } from "../boards/freshness.js";
 import { SUPPORTED_BOARDS } from "../boards/types.js";
-import { fetchBoard, fetchJobUrl } from "../boards/fetch.js";
+import { fetchBoard, fetchJobUrl, fetchText, type BoardFetchReport } from "../boards/fetch.js";
+import { activeCooldowns, COOLDOWN_MS, detailCache, paced, recordCooldowns, type SiteCooldown } from "../boards/pace.js";
 import { buildSearchPacks, criteriaFromProfile, type BoardId } from "../boards/index.js";
 import { parseDetailHtml } from "../boards/parse.js";
 import { allowedJobUrl, boardFromUrl, jobUrlAllowed, listingFromPosting, parsePastedJd } from "../jd.js";
@@ -9,6 +10,16 @@ import { upsertJobs } from "../job-state.js";
 import { scoreJob as scoreAgainstProfile } from "../score.js";
 import type { ActionContext } from "../state-store.js";
 import { resumeProfileKey, scoredJobsKey, type JobListing, type ResumeProfile } from "../store.js";
+
+const BOARD_NAMES: Record<BoardId, string> = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
+
+/** A site that recently showed a captcha or block is left alone until the user handles it and asks to retry. */
+function cooldownReport(board: BoardId, cooling: SiteCooldown): BoardFetchReport {
+  const minutes = Math.max(1, Math.ceil((cooling.until - Date.now()) / 60_000));
+  const message = `${BOARD_NAMES[board]}刚才出现${cooling.reason === "captcha" ? "验证码或滑块验证" : "访问拦截"}，${minutes} 分钟内不再自动访问该站。请用户在 botjob 浏览器窗口里自己完成验证；用户明确要求重试时再带 retryBlocked=true 搜索。`;
+  return { board, ok: false, reason: cooling.reason, message, listings: [], detailErrors: [],
+    userActions: [{ board, reason: cooling.reason, url: cooling.url, message }] };
+}
 
 const LIEPIN_PUBLIC_NOTE = "猎聘在 botjob 浏览器窗口里会被站点脚本清空页面，本次改用未登录的公开页面读取猎聘。";
 
@@ -20,6 +31,8 @@ export type SearchJobsInput = {
   attemptFetch?: boolean;
   accessMode?: "public" | "browser";
   limitPerBoard?: number;
+  /** The user handled a captcha or block in the window and asked to search that site again before the 30-minute cool-down ends. */
+  retryBlocked?: boolean;
 };
 
 export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
@@ -87,12 +100,26 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
     };
   }
 
-  const reports = await Promise.all(selected.map(async (board) => {
+  // Boards one after another, each paced to one page at a time; detail pages come from a 24 h cache when possible.
+  const cooldowns = await activeCooldowns(ctx.store, ctx.sessionId);
+  const cache = detailCache(ctx.store);
+  const reports: BoardFetchReport[] = [];
+  const cooldownChanges: Partial<Record<BoardId, SiteCooldown | null>> = {};
+  for (const board of selected) {
+    const cooling = cooldowns[board];
+    if (cooling && !input.retryBlocked) {
+      reports.push(cooldownReport(board, cooling));
+      continue;
+    }
     // 猎聘's page script blanks itself in an automated browser window, so 猎聘 always uses public pages.
     const browser = input.accessMode === "browser" && board !== "liepin";
-    const report = await fetchBoard(board, criteria, { read: browser ? browserAccess.reader(board) : undefined, limit: input.limitPerBoard });
-    return input.accessMode === "browser" && board === "liepin" ? { ...report, message: `${LIEPIN_PUBLIC_NOTE}${report.message}` } : report;
-  }));
+    const read = paced(board, browser ? browserAccess.reader(board) : fetchText);
+    const report = await fetchBoard(board, criteria, { read, browser, limit: input.limitPerBoard, cache });
+    const stop = [{ reason: report.reason, url: "" }, ...(report.userActions ?? [])].find(item => item.reason === "captcha" || item.reason === "blocked");
+    cooldownChanges[board] = stop ? { until: Date.now() + COOLDOWN_MS, reason: stop.reason as SiteCooldown["reason"], url: stop.url || searchPacks.find(pack => pack.board === board)?.searchUrl || "" } : null;
+    reports.push(input.accessMode === "browser" && board === "liepin" ? { ...report, message: `${LIEPIN_PUBLIC_NOTE}${report.message}` } : report);
+  }
+  await recordCooldowns(ctx.store, ctx.sessionId, cooldownChanges);
   const listings = reports.flatMap((report) =>
     report.listings.flatMap((posting) => {
       try {
@@ -202,8 +229,12 @@ export async function scoreJob(ctx: ActionContext, input: ScoreJobInput) {
   }
 
   let fetchError: string | undefined;
-  if (url && !ctx.offline) {
-    const fetched = await fetchJobUrl(url, board);
+  const cooling = url && !ctx.offline ? (await activeCooldowns(ctx.store, ctx.sessionId))[board] : undefined;
+  if (cooling) {
+    fetchError = cooldownReport(board, cooling).message;
+    if (!input.text?.trim()) return { ok: false as const, reason: cooling.reason, message: `${fetchError}也可以直接把 JD 正文贴给我打分。` };
+  } else if (url && !ctx.offline) {
+    const fetched = await fetchJobUrl(url, board, Date.now(), paced(board, fetchText));
     if (fetched.ok) {
       return scorePosting(ctx, profile, fetched.job, input);
     }

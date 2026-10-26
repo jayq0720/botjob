@@ -7,6 +7,7 @@ import { liepinSearch } from "./liepin.js";
 import { zhilianSearch, ZHILIAN_CITY_ID } from "./zhilian.js";
 import { allowedJobUrl, canonicalJobUrl, type JobPosting } from "../jd.js";
 import type { readRenderedJobs, RenderDiagnostics } from "./rendered.js";
+import type { DetailCache } from "./pace.js";
 import {
   parseDetailHtml,
   parseSearchHtml,
@@ -110,6 +111,16 @@ export function classifyFetch(input: {
     };
   }
   return { blocked: false };
+}
+
+/** classifyFetch, plus a rendered page that showed a login prompt or a captcha/slider. */
+export function pageGate(fetched: Fetched): ReturnType<typeof classifyFetch> {
+  const gate = classifyFetch(fetched);
+  const diagnostics = fetched.rendered?.diagnostics;
+  if (gate.blocked || diagnostics?.state !== "restricted") return gate;
+  return diagnostics.restriction === "login"
+    ? { blocked: true, reason: "login_required", message: "页面要求登录后才能看岗位。请在 botjob 浏览器窗口里登录自己的账号后继续搜索。" }
+    : { blocked: true, reason: "captcha", message: "页面要求验证（验证码或滑块）。不会代为完成；请在 botjob 浏览器窗口里自己完成后再搜索。" };
 }
 
 export type Fetched = {
@@ -283,7 +294,7 @@ async function searchOnce(board: BoardId, criteria: SearchCriteria, read: PageRe
   if ("error" in fetched) {
     return { ...none, failure: { board, ok: false, reason: "network", message: `抓取搜索页失败：${fetched.error}`, listings: [], detailErrors: [] } };
   }
-  const gate = classifyFetch(fetched);
+  const gate = pageGate(fetched);
   const diagnostics = fetched.rendered?.diagnostics;
   let listings: JobPosting[] = [];
   const userActions: NonNullable<BoardFetchReport["userActions"]> = gate.blocked && ["login_required", "captcha", "blocked"].includes(gate.reason)
@@ -301,7 +312,7 @@ async function searchOnce(board: BoardId, criteria: SearchCriteria, read: PageRe
   if (listings.length > 0) return page;
   let apiFailure: { reason: FetchReason; message: string } | undefined;
   if (board === "zhilian" && !gate.blocked && !browser) {
-    const api = await fetchJsonApi(board, criteria);
+    const api = await fetchJsonApi(board, criteria, read);
     if (api.ok && api.jobs.length) return { ...page, listings: api.jobs };
     if (!api.ok) apiFailure = { reason: api.reason, message: api.message };
   }
@@ -326,12 +337,14 @@ async function searchOnce(board: BoardId, criteria: SearchCriteria, read: PageRe
 export async function fetchBoard(
   board: BoardId,
   criteria: SearchCriteria,
-  options: { read?: PageReader; limit?: number } = {},
+  /** browser: read is the logged-in browser window. Defaults to true when a reader is given. */
+  options: { read?: PageReader; browser?: boolean; limit?: number; cache?: DetailCache } = {},
 ): Promise<BoardFetchReport> {
   const read = options.read ?? fetchText;
+  const browser = options.browser ?? !!options.read;
   const limit = Math.max(1, Math.min(20, options.limit ?? MAX_LISTINGS));
   const now = Date.now();
-  if (board === "job51" && !options.read) {
+  if (board === "job51" && !browser) {
     // we.51job.com search is a script-rendered shell; a plain fetch can never contain jobs.
     return { board, ok: false, reason: "parse_error", message: "前程无忧的搜索结果由页面脚本加载，请用 accessMode=\"browser\" 重试（会打开 botjob 浏览器窗口）。", listings: [], detailErrors: [] };
   }
@@ -339,7 +352,7 @@ export async function fetchBoard(
   const titles = [...new Set(criteria.titles.map(title => title.trim()).filter(Boolean))].slice(0, MAX_TITLES);
   const searches: SearchPage[] = [];
   for (const title of titles.length ? titles : [undefined]) {
-    const page = await searchOnce(board, title ? { ...criteria, titles: [title] } : criteria, read, !!options.read, now);
+    const page = await searchOnce(board, title ? { ...criteria, titles: [title] } : criteria, read, browser, now);
     searches.push(page);
     // A login wall, captcha or block stops the remaining searches on this site.
     if (page.blocked) break;
@@ -361,8 +374,9 @@ export async function fetchBoard(
     return !reason;
   };
   const eligible = candidates.filter((job) => freshness(job, now) !== "old").filter(allowEmployer);
-  const detailBudget = blocked ? 0 : Math.max(MAX_DETAILS, limit);
-  const { jobs: enriched, detailErrors, detailFailures, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget);
+  // Detail reads are the bulk of page loads; more results than this stay list-only.
+  const detailBudget = blocked ? 0 : MAX_DETAILS;
+  const { jobs: enriched, detailErrors, detailFailures, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget, options.cache);
   const jobs = enriched.filter(allowEmployer);
   const timely = jobs.filter((job) => freshness(job, now) === "recent")
     .sort((a, b) => Date.parse(b.sourceUpdatedAt!) - Date.parse(a.sourceUpdatedAt!))
@@ -399,7 +413,7 @@ export async function fetchJobUrl(
   if ("error" in fetched) {
     return { ok: false, reason: "network", message: `抓取岗位页失败：${fetched.error}` };
   }
-  const gate = classifyFetch(fetched);
+  const gate = pageGate(fetched);
   if (gate.blocked) return { ok: false, reason: gate.reason, message: gate.message };
   const parsed = parseDetailHtml(board, fetched.body, fetched.finalUrl, now);
   const job = mergeRendered(parsed ? [parsed] : [], fetched.rendered?.jobs)
@@ -420,19 +434,28 @@ async function enrichDetails(
   now: number,
   read: PageReader,
   maxDetails: number,
+  cache?: DetailCache,
 ): Promise<{ jobs: JobPosting[]; detailErrors: string[]; detailFailures: NonNullable<BoardFetchReport["detailFailures"]>; userActions: NonNullable<BoardFetchReport["userActions"]> }> {
   const userActions: NonNullable<BoardFetchReport["userActions"]> = [];
   const detailErrors: string[] = [];
   const detailFailures: NonNullable<BoardFetchReport["detailFailures"]> = [];
   const jobs: JobPosting[] = [];
+  let reads = 0;
   for (const [index, listing] of listings.entries()) {
     // Do not open a detail page only to fill a company intro. A login wall on that
     // extra read used to stop the loop before later list-only jobs could record one.
-    if (index >= maxDetails || listing.jdStatus === "detail" || !listing.url) {
+    if (listing.jdStatus === "detail" || !listing.url) {
       jobs.push(listing);
       continue;
     }
-    const detail = await fetchJobUrl(listing.url, board, now, read);
+    const cached = await cache?.get(listing.url, now);
+    if (!cached && reads >= maxDetails) {
+      jobs.push(listing);
+      continue;
+    }
+    if (!cached) reads++;
+    const detail = cached ? { ok: true as const, job: cached } : await fetchJobUrl(listing.url, board, now, read);
+    if (detail.ok && !cached) await cache?.put(listing.url, detail.job, now).catch(() => undefined);
     if (!detail.ok) {
       detailErrors.push(`${listing.url}：${detail.message}`);
       detailFailures.push({ url: listing.url, reason: detail.reason });
@@ -484,6 +507,7 @@ function jobsFromJson(board: BoardId, body: string): JobPosting[] {
 async function fetchJsonApi(
   board: BoardId,
   criteria: SearchCriteria,
+  read: PageReader = fetchText,
 ): Promise<
   | { ok: true; jobs: JobPosting[] }
   | { ok: false; reason: FetchReason; message: string }
@@ -491,7 +515,7 @@ async function fetchJsonApi(
   const query = criteria.titles[0] || criteria.keywords[0] || "";
   const city = criteria.cities[0] ?? "全国";
   const url = zhilianApiUrl(query, city);
-  const fetched = await fetchText(url);
+  const fetched = await read(url);
   if ("error" in fetched) {
     return { ok: false, reason: "network", message: fetched.error };
   }

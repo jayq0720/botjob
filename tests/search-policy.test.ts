@@ -115,8 +115,10 @@ test("raising the local result cap never claims login is required", async () => 
   assert.equal(limited.listings.length, 5);
   assert.equal(limited.limits?.truncated, true);
   assert.equal(limited.pendingEmployerReview?.length, 3);
+  // A higher cap returns more saved results but opens no more than five detail pages per site.
   const more = await fetchBoard("zhilian", criteria, { read, limit: 20 });
-  assert.equal(more.listings.length, 8);
+  assert.equal(more.listings.length, 5);
+  assert.equal(more.limits?.maxDetails, 5);
   assert.deepEqual(more.userActions, []);
 });
 

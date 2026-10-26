@@ -12,6 +12,8 @@ export type RenderDiagnostics = {
   elapsedMs: number;
   cardCount: number;
   parsedCount: number;
+  /** Set with state "restricted": a login prompt, or a captcha/slider the user must complete. */
+  restriction?: "login" | "verification";
 };
 
 type Selectors = { cards: string; anchor: string; title: [detail: string, card: string]; company: [string, string]; industry: [string, string];
@@ -118,10 +120,13 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
     });
     const empty = Array.from(document.querySelectorAll('.search-empty, .job-list-empty, .no-result, .no-data, .empty-result, .j_nolist'))
       .some(node => dom.visible(node) && /暂无|没有|未找到|无符合/.test(node.textContent ?? ""));
-    const restricted = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel, #nc_1_wrapper'))
-      .some(node => dom.visible(node) && /扫码登录|验证码|安全验证|人机验证|滑动验证|拖动滑块|登录后.*(?:职位|岗位)/.test(node.textContent ?? ""))
-      // A full-page slider (51job "滑动验证页面") has no form or dialog around it.
+    const prompts = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel, #nc_1_wrapper'))
+      .filter(node => dom.visible(node)).map(node => node.textContent ?? "");
+    // A full-page slider (51job "滑动验证页面") has no form or dialog around it.
+    const verification = prompts.some(text => /验证码|安全验证|人机验证|滑动验证|拖动滑块/.test(text))
       || /滑动验证|安全验证|访问验证/.test(document.title) || /请按住滑块|拖动到最右边/.test(document.body?.innerText ?? "");
+    const login = prompts.some(text => /扫码登录|登录后.*(?:职位|岗位)/.test(text));
+    const restricted: "verification" | "login" | "" = verification ? "verification" : login ? "login" : "";
     // Visible page text lets the host find a "公司介绍" section when no known selector matches.
     const pageText = detail ? (document.body?.innerText ?? "").slice(0, 30_000) : "";
     return { jobs, cardCount: roots.length, empty, restricted, pageText };
@@ -176,5 +181,6 @@ export async function readRenderedJobs(page: Page, board: BoardId, options: { ti
     await new Promise(resolve => setTimeout(resolve, Math.min(200, timeout - (Date.now() - started))));
   } while (true);
   return { jobs, diagnostics: { mode: "browser", state, pageKind: detail ? "detail" : "search",
-    elapsedMs: Date.now() - started, cardCount: detail ? 0 : snapshot.cardCount, parsedCount: jobs.length } satisfies RenderDiagnostics };
+    elapsedMs: Date.now() - started, cardCount: detail ? 0 : snapshot.cardCount, parsedCount: jobs.length,
+    ...(state === "restricted" && snapshot.restricted ? { restriction: snapshot.restricted } : {}) } satisfies RenderDiagnostics };
 }

@@ -10,6 +10,7 @@ import { browserAccess, profileLockOwner } from "../bot/lib/boards/browser.js";
 import { companyTagLine, introAfterHeading } from "../bot/lib/boards/company.js";
 import { classifyFetch, fetchBoard, fetchJobUrl } from "../bot/lib/boards/fetch.js";
 import { job51DetailUrl } from "../bot/lib/boards/job51.js";
+import { readPacing } from "../bot/lib/boards/pace.js";
 import { parseDetailHtml, parseSearchHtml } from "../bot/lib/boards/parse.js";
 import { readRenderedJobs } from "../bot/lib/boards/rendered.js";
 import { mcpActionContext } from "../bot/lib/state-store.js";
@@ -116,7 +117,8 @@ test("a captcha on one title search stops the other searches on that site", asyn
 
 test("browser-mode search reads 猎聘 from public pages and says so", async () => {
   const home = await mkdtemp(path.join(tmpdir(), "botjob-liepin-public-"));
-  const original = { fetch: globalThis.fetch, reader: browserAccess.reader };
+  const original = { fetch: globalThis.fetch, reader: browserAccess.reader, pacing: { ...readPacing } };
+  Object.assign(readPacing, { minGapMs: 0, maxGapMs: 0 });
   const opened: string[] = [];
   browserAccess.reader = board => { opened.push(board); return async () => ({ error: "should not open a browser" }); };
   globalThis.fetch = (async () => new Response(html("liepin-search.html"), { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
@@ -128,6 +130,7 @@ test("browser-mode search reads 猎聘 from public pages and says so", async () 
   } finally {
     globalThis.fetch = original.fetch;
     browserAccess.reader = original.reader;
+    Object.assign(readPacing, original.pacing);
     await rm(home, { recursive: true, force: true });
   }
 });

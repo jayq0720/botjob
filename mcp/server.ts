@@ -120,6 +120,10 @@ const searchSchema = z.object({
     .boolean()
     .optional()
     .describe("false 时只生成搜索链接，不访问招聘网站。默认会尝试抓取公开页面。"),
+  retryBlocked: z
+    .boolean()
+    .optional()
+    .describe("站点出现验证码、滑块或拦截后，botjob 30 分钟内不再自动访问该站。只有用户说已在 botjob 窗口完成验证并明确要求重试时才设为 true。"),
 });
 
 const scoreSchema = z
@@ -286,7 +290,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "搜索岗位",
       description:
-        "按已保存画像生成智联、猎聘、前程无忧的搜索链接（前程无忧需 accessMode=browser）。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
+        "按已保存画像生成智联、猎聘、前程无忧的搜索链接（前程无忧需 accessMode=browser）。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。为减少对招聘站的访问，每站逐页读取并随机间隔 3–6 秒，详情页每站最多 5 个并缓存 24 小时；遇到验证码、滑块或拦截立即停止该站，并在 30 分钟内不再自动访问，除非用户完成验证后明确要求重试（retryBlocked=true）。猎聘在浏览器模式下也读取公开页面。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
       inputSchema: searchSchema,
       annotations: {
         readOnlyHint: false,
