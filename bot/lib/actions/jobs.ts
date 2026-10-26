@@ -115,6 +115,8 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
       message: report.message,
       listingCount: report.listings.length,
       detailErrors: report.detailErrors,
+      detailFailures: report.detailFailures,
+      diagnostics: report.diagnostics,
       freshness: report.freshness,
       excludedEmployers: report.excludedEmployers,
       pendingEmployerReviewCount: report.pendingEmployerReview?.length ?? 0,

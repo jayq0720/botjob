@@ -20,7 +20,7 @@ test("browser reads reuse the opened profile and missing/closed sessions ask for
   const access = createBrowserAccess(async () => {
     launches++;
     return { pages: () => [fakePage()], newPage: async () => fakePage(), on: (_: string, fn: () => void) => { onClose = fn; }, close: async () => onClose() } as unknown as BrowserContext;
-  });
+  }, async () => ({ jobs: [], diagnostics: { mode: "browser", state: "timeout", pageKind: "detail", elapsedMs: 0, cardCount: 0, parsedCount: 0 } }));
   const read = access.reader("liepin");
   const target = "https://www.liepin.com/job/123.shtml";
   const absent = await read(target);

@@ -4,7 +4,8 @@ import { configureEnvironmentProxy, networkErrorMessage } from "../network.js";
 import type { BoardId, SearchCriteria } from "./types.js";
 import { liepinSearch } from "./liepin.js";
 import { zhilianSearch, ZHILIAN_CITY_ID } from "./zhilian.js";
-import { allowedJobUrl, type JobPosting } from "../jd.js";
+import { allowedJobUrl, canonicalJobUrl, type JobPosting } from "../jd.js";
+import type { readRenderedJobs, RenderDiagnostics } from "./rendered.js";
 import {
   parseDetailHtml,
   parseSearchHtml,
@@ -19,6 +20,7 @@ export type FetchReason =
   | "blocked"
   | "empty"
   | "parse_error"
+  | "render_timeout"
   | "skipped";
 
 export type BoardFetchReport = {
@@ -28,6 +30,8 @@ export type BoardFetchReport = {
   message: string;
   listings: JobPosting[];
   detailErrors: string[];
+  diagnostics?: RenderDiagnostics;
+  detailFailures?: Array<{ url: string; reason: FetchReason }>;
   pendingEmployerReview?: JobPosting[];
   excludedEmployers?: { insurance: number; labor_dispatch: number };
   userActions?: Array<{ board: BoardId; reason: FetchReason; url: string; message: string }>;
@@ -110,7 +114,25 @@ export type Fetched = {
   finalUrl: string;
   body: string;
   contentType: string;
+  rendered?: Awaited<ReturnType<typeof readRenderedJobs>>;
 };
+
+// Match by job URL; never borrow dates/company metadata from neighbouring recommendations.
+function mergeRendered(parsed: JobPosting[], rendered: JobPosting[] = []): JobPosting[] {
+  const jobs = new Map(parsed.map(job => [canonicalJobUrl(job.url), job]));
+  for (const job of rendered) {
+    const key = canonicalJobUrl(job.url);
+    const previous = jobs.get(key);
+    if (!previous) { jobs.set(key, job); continue; }
+    const fields = Object.fromEntries(Object.entries(job).filter(([, value]) => value !== undefined && value !== "" && value !== "（未提供）"));
+    const merged = { ...previous, ...fields } as JobPosting;
+    merged.jdStatus = merged.description.length >= 20 ? "detail" : "list_only";
+    // An explicit but unreadable update label cannot fall back to an older publication date.
+    if (job.sourceTimeText) merged.sourceUpdatedAt = job.sourceUpdatedAt;
+    jobs.set(key, merged);
+  }
+  return [...jobs.values()];
+}
 
 export type PageReader = (url: string) => Promise<Fetched | { error: string }>;
 
@@ -254,6 +276,7 @@ export async function fetchBoard(
     if (listings.length === 0) {
       listings = parseSearchHtml(board, fetched.body, fetched.finalUrl, now);
     }
+    listings = mergeRendered(listings, fetched.rendered?.jobs);
   }
   let apiFailure: { reason: FetchReason; message: string } | undefined;
   if (listings.length === 0 && board === "zhilian" && !gate.blocked && !options.read) {
@@ -263,7 +286,14 @@ export async function fetchBoard(
   }
   if (listings.length === 0) {
     if (gate.blocked) {
-      return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [], userActions };
+      return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [], userActions, diagnostics: fetched.rendered?.diagnostics };
+    }
+    if (fetched.rendered) {
+      const diagnostics = fetched.rendered.diagnostics;
+      const empty = diagnostics.state === "empty";
+      return { board, ok: false, reason: empty ? "empty" : diagnostics.cardCount > 0 || diagnostics.state !== "timeout" ? "parse_error" : "render_timeout",
+        message: empty ? "网站明确显示暂无搜索结果。" : "已读取浏览器渲染页面，但未识别到可用岗位。可能仍在加载、页面结构变化或验证界面未识别；这不能证明已登录，也不代表没有岗位。请检查 botjob 专用窗口，不要仅因解析失败反复扫码。",
+        listings: [], detailErrors: [], diagnostics };
     }
     if (
       apiFailure?.reason === "empty" &&
@@ -300,7 +330,7 @@ export async function fetchBoard(
   };
   const eligible = candidates.filter((job) => freshness(job, now) !== "old").filter(allowEmployer);
   const detailBudget = gate.blocked ? 0 : Math.max(MAX_DETAILS, limit);
-  const { jobs: enriched, detailErrors, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget);
+  const { jobs: enriched, detailErrors, detailFailures, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget);
   const jobs = enriched.filter(allowEmployer);
   const timely = jobs.filter((job) => freshness(job, now) === "recent")
     .sort((a, b) => Date.parse(b.sourceUpdatedAt!) - Date.parse(a.sourceUpdatedAt!))
@@ -312,10 +342,12 @@ export async function fetchBoard(
   return {
     board,
     ok: recent.length > 0,
-    reason: recent.length ? undefined : "empty",
+    reason: recent.length ? undefined : excludedUnknown > 0 && detailFailures.length ? detailFailures[0].reason : "empty",
     message: `最近72小时内可确认发布或更新的岗位 ${recent.length} 个；排除过期 ${excludedOld} 个、时间无法确认 ${excludedUnknown} 个；剔除保险公司 ${excludedEmployers.insurance} 个、劳务派遣公司 ${excludedEmployers.labor_dispatch} 个；公司性质待核实 ${pendingEmployerReview.length} 个，暂不推荐。`,
     listings: recent,
     detailErrors,
+    detailFailures,
+    diagnostics: fetched.rendered?.diagnostics,
     excludedEmployers,
     pendingEmployerReview,
     userActions: [...userActions, ...detailActions],
@@ -337,12 +369,14 @@ export async function fetchJobUrl(
   }
   const gate = classifyFetch(fetched);
   if (gate.blocked) return { ok: false, reason: gate.reason, message: gate.message };
-  const job = parseDetailHtml(board, fetched.body, fetched.finalUrl, now);
+  const parsed = parseDetailHtml(board, fetched.body, fetched.finalUrl, now);
+  const job = mergeRendered(parsed ? [parsed] : [], fetched.rendered?.jobs)
+    .find(item => canonicalJobUrl(item.url) === canonicalJobUrl(fetched.finalUrl));
   if (!job || job.description.length < 20) {
     return {
       ok: false,
-      reason: "parse_error",
-      message: "岗位页没有解析出职位名和 JD 正文。可能需要登录，或页面结构已变。",
+      reason: fetched.rendered?.diagnostics.state === "timeout" ? "render_timeout" : "parse_error",
+      message: "岗位页没有解析出职位名和 JD 正文。可能尚未加载完成或页面结构已变；仅凭此错误不能认定需要登录。",
     };
   }
   return { ok: true, job };
@@ -354,9 +388,10 @@ async function enrichDetails(
   now: number,
   read: PageReader,
   maxDetails: number,
-): Promise<{ jobs: JobPosting[]; detailErrors: string[]; userActions: NonNullable<BoardFetchReport["userActions"]> }> {
+): Promise<{ jobs: JobPosting[]; detailErrors: string[]; detailFailures: NonNullable<BoardFetchReport["detailFailures"]>; userActions: NonNullable<BoardFetchReport["userActions"]> }> {
   const userActions: NonNullable<BoardFetchReport["userActions"]> = [];
   const detailErrors: string[] = [];
+  const detailFailures: NonNullable<BoardFetchReport["detailFailures"]> = [];
   const jobs: JobPosting[] = [];
   for (const [index, listing] of listings.entries()) {
     if (index >= maxDetails || listing.jdStatus === "detail" || !listing.url) {
@@ -366,6 +401,7 @@ async function enrichDetails(
     const detail = await fetchJobUrl(listing.url, board, now, read);
     if (!detail.ok) {
       detailErrors.push(`${listing.url}：${detail.message}`);
+      detailFailures.push({ url: listing.url, reason: detail.reason });
       if (["login_required", "captcha", "blocked"].includes(detail.reason)) userActions.push({ board, reason: detail.reason, url: listing.url, message: detail.message });
       jobs.push(listing);
       if (["login_required", "captcha", "blocked"].includes(detail.reason)) {
@@ -391,7 +427,7 @@ async function enrichDetails(
       jdStatus: "detail",
     });
   }
-  return { jobs, detailErrors, userActions };
+  return { jobs, detailErrors, detailFailures, userActions };
 }
 
 function jobsFromJson(board: BoardId, body: string): JobPosting[] {

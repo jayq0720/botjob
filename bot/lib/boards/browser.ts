@@ -5,11 +5,12 @@ import { botjobHome } from "../state-store.js";
 import { jobUrlAllowed } from "../jd.js";
 import { SUPPORTED_BOARDS, type BoardId } from "./types.js";
 import type { PageReader } from "./fetch.js";
+import { readRenderedJobs } from "./rendered.js";
 
 const homes = { zhilian: "https://www.zhaopin.com/", liepin: "https://www.liepin.com/" };
 
 /** Cookies remain in a dedicated local browser profile; never returned to the AI. */
-export function createBrowserAccess(launch: (board: BoardId) => Promise<BrowserContext>) {
+export function createBrowserAccess(launch: (board: BoardId) => Promise<BrowserContext>, render = readRenderedJobs) {
   const sessions = new Map<BoardId, Promise<BrowserContext>>();
   async function open(board: BoardId, url = homes[board]) {
     if (!SUPPORTED_BOARDS.includes(board) || !jobUrlAllowed(url, board)) throw new Error("登录链接必须属于所选招聘站。");
@@ -24,7 +25,7 @@ export function createBrowserAccess(launch: (board: BoardId) => Promise<BrowserC
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.bringToFront();
     return { ok: true as const, board, status: "awaiting_login" as const, url,
-      message: "请在打开的招聘网站窗口中登录自己的账号；完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。" };
+      message: `请在 botjob 刚打开的${board === "liepin" ? "猎聘" : "智联"}专用窗口中登录自己的账号；日常 Chrome/Edge 窗口的登录不会同步到这里，两站也需要分别登录。完成后保持窗口打开，告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
   }
   function reader(board: BoardId): PageReader {
     return async url => {
@@ -36,11 +37,12 @@ export function createBrowserAccess(launch: (board: BoardId) => Promise<BrowserC
       try {
         // Browser-managed cookies never enter fetch headers or model-visible results.
         const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => undefined);
+        if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
+        const rendered = await render(page, board);
         if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
         const body = await page.content();
         if (Buffer.byteLength(body) > 2_000_000) return { error: "响应体超过 2MB。" };
-        return { status: response?.status() ?? 200, finalUrl: page.url(), body, contentType: "text/html" };
+        return { status: response?.status() ?? 200, finalUrl: page.url(), body, contentType: "text/html", rendered };
       } catch {
         return { error: "浏览器读取失败。请检查登录窗口是否仍然打开，再重试。" };
       } finally { await page.close().catch(() => undefined); }

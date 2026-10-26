@@ -31,7 +31,7 @@ test("rolling 72-hour cutoff rejects unknown, future and expired evidence", () =
 
 test("Liepin uses the job update label over its old publication date and ignores SEO footer", () => {
   const html=detail("1",{datePosted:"2026-10-10T09:00:00+08:00"});
-  const job=parseDetailHtml("liepin",html+'<span class="update-time">10月24日更新</span>',"https://www.liepin.com/job/1.shtml",NOW)!;
+  const job=parseDetailHtml("liepin",html+'<section class="job-apply-container"><span class="update-time">10月24日更新</span></section>',"https://www.liepin.com/job/1.shtml",NOW)!;
   assert.equal(freshness(job,NOW),"recent");
   assert.equal(job.sourceTimeKind,"updated");
   const old=parseDetailHtml("liepin",html+'<section class="time-factor-wrap">更新时间：2026-10-25</section>',"https://www.liepin.com/job/1.shtml",NOW)!;

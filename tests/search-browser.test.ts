@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { test } from "node:test";
+import { chromium } from "playwright";
+import { createBrowserAccess } from "../bot/lib/boards/browser.js";
+import { readRenderedJobs } from "../bot/lib/boards/rendered.js";
+import { fetchBoard, fetchJobUrl } from "../bot/lib/boards/fetch.js";
+
+const executablePath = existsSync(chromium.executablePath()) ? chromium.executablePath() : "/usr/bin/chromium";
+const criteria = { titles: ["薪酬经理"], keywords: [], cities: ["上海"] };
+const jd = "负责薪酬核算、绩效方案设计、人力成本预算及员工关系管理。";
+const date = new Date(Date.now() - 3600_000).toISOString();
+
+// All HTTP requests are intercepted; no real accounts, recruiters or applications are used.
+test("browser search waits for delayed DOM and reads nested/reordered fields on both boards", { skip: !existsSync(executablePath), timeout: 45_000 }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    for (const board of ["liepin", "zhilian"] as const) {
+      const jobUrl = board === "liepin" ? "https://www.liepin.com/job/123.shtml" : "https://www.zhaopin.com/jobdetail/CC123.htm";
+      const card = board === "liepin"
+        ? `<div class="extra job-card-wrapper"><div class="extra job-card-pc-container"><a href="${jobUrl}?from=search"><div class="job-title-box"><div class="ellipsis-1 extra" title="薪酬经理"><b>薪酬经理</b></div></div></a><span class="company-name"><b>示例科技</b></span><div class="company-tags-box">软件服务</div></div></div>`
+        : `<div class="extra joblist-box__item"><a href="${jobUrl}" class="extra jobinfo__name"><b>薪酬经理</b></a><a class="extra companyinfo__name"><b>示例科技</b></a><div class="companyinfo__tag">软件服务</div></div>`;
+      const detail = board === "liepin"
+        ? `<section class="job-apply-container"><span class="extra name"><b>薪酬经理</b></span><span class="update-time">${date}</span></section><div class="company-info"><span class="name">示例科技</span></div><div data-extra="yes" data-selector="job-intro-content"><p>${jd}</p></div>`
+        : `<section class="summary-planes"><h1 class="extra summary-planes__title"><b>薪酬经理</b></h1></section><a class="company-info__name">示例科技</a><div class="describtion-card__detail-content"><div>${jd}</div></div>`;
+      const context = await browser.newContext();
+      await context.route("**/*", route => {
+        const isDetail = /\/(?:job|jobdetail)\//.test(route.request().url());
+        const state = board === "zhilian" && isDetail ? `window.__INITIAL_STATE__={jobDetail:{detailedPosition:{number:'CC123',positionUpdateTime:${JSON.stringify(date)}}}};` : "";
+        // Delayed JS after DOMContentLoaded/network idle.
+        const body = `<div id="app"></div><script>setTimeout(()=>{${state}document.getElementById('app').innerHTML=${JSON.stringify(isDetail ? detail : card)}},${isDetail ? 350 : 3400});</script>`;
+        return route.fulfill({ contentType: "text/html; charset=utf-8", body });
+      });
+      const access = createBrowserAccess(async () => context, (page, board) => readRenderedJobs(page, board, { timeoutMs: 7000, settleMs: 200 }));
+      await access.open(board);
+      try {
+        const report = await fetchBoard(board, criteria, { read: access.reader(board) });
+        assert.equal(report.ok, true, JSON.stringify(report));
+        assert.equal(report.listings.length, 1);
+        assert.equal(report.listings[0].title, "薪酬经理");
+        assert.equal(report.listings[0].company, "示例科技");
+        assert.equal(report.listings[0].description, jd);
+        assert.equal(report.listings[0].sourceUpdatedAt, date);
+        assert.equal(report.diagnostics?.state, "ready");
+        assert.equal(report.diagnostics?.parsedCount, 1);
+      } finally { await access.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test("browser diagnostics distinguish empty, timeout, login and unknown job timestamps", { skip: !existsSync(executablePath), timeout: 30_000 }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const context = await browser.newContext();
+    let markup = "";
+    await context.route("**/*", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: markup }));
+    const access = createBrowserAccess(async () => context, (page, board) => readRenderedJobs(page, board, { timeoutMs: 500, settleMs: 50 }));
+    await access.open("liepin");
+    try {
+      for (const [html, expected] of [
+        ['<div class="search-empty">暂无符合条件的职位</div>', "empty"],
+        ['<div id="app"></div>', "render_timeout"],
+        ['<div class="job-card-pc-container">结构未知</div>', "parse_error"],
+        ['<form>扫码登录，登录后查看更多职位</form>', "login_required"],
+      ]) {
+        markup = html;
+        const report = await fetchBoard("liepin", criteria, { read: access.reader("liepin") });
+        assert.equal(report.reason, expected, JSON.stringify(report));
+        assert.equal(report.listings.length, 0);
+        assert.equal(report.userActions?.length ?? 0, expected === "login_required" ? 1 : 0);
+      }
+      // A recruiter/recommendation date cannot become the current job's freshness evidence.
+      markup = `<section class="job-apply-container"><span class="name">薪酬经理</span></section><div data-selector="job-intro-content">${jd}</div><aside class="recommendation"><span class="update-time">${date}</span></aside>`;
+      const result = await fetchJobUrl("https://www.liepin.com/job/123.shtml", "liepin", Date.now(), access.reader("liepin"));
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.job.sourceUpdatedAt, undefined);
+    } finally { await access.close(); }
+  } finally { await browser.close(); }
+});
+
+test("failed details keep the failure reason instead of reporting an empty search", async () => {
+  let reads = 0;
+  const report = await fetchBoard("liepin", criteria, { read: async url => {
+    reads++;
+    return { status: 200, finalUrl: url, contentType: "text/html", body: reads === 1
+      ? '<div class="job-card-pc-container"><a href="https://www.liepin.com/job/123.shtml"><div title="薪酬经理" class="ellipsis-1">薪酬经理</div></a><span class="company-name">示例科技</span><div class="company-tags-box">软件服务</div></div>'
+      : '<main id="app"></main>' };
+  } });
+  assert.equal(report.reason, "parse_error");
+  assert.equal(report.detailFailures?.[0].reason, "parse_error");
+  assert.equal(report.freshness?.excludedUnknown, 1);
+});

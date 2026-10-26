@@ -156,7 +156,8 @@ export function parseDetailHtml(
   if (!job) return undefined;
   if (board === "liepin") {
     // Only the job's own update label, never footer SEO dates or recruiter activity.
-    const updated = textByClass(html, "update-time");
+    const header = html.match(/<section\b[^>]*class="[^"]*\bjob-apply-container\b[^"]*"[^>]*>[\s\S]*?<\/section>/)?.[0];
+    const updated = header ? textByClass(header, "update-time") : undefined;
     return updated ? { ...job, ...jobTime(updated, "updated", now) } : job;
   }
   const state = initialState(html);
