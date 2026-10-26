@@ -15,7 +15,7 @@ test("one shared browser window serves every board and relaunches from the saved
   const fakePage = () => ({
     goto: async (target: string) => { url = target; return { status: () => 200 }; },
     bringToFront: async () => {}, waitForLoadState: async () => {},
-    url: () => url, content: async () => { reads++; return "authenticated job page"; }, close: async () => {},
+    url: () => url, content: async () => { reads++; return "authenticated job page"; }, close: async () => {}, isClosed: () => false,
   });
   const access = createBrowserAccess(async () => {
     launches++;
@@ -39,6 +39,28 @@ test("one shared browser window serves every board and relaunches from the saved
   const again = await read(target);
   assert.equal("body" in again && again.body, "authenticated job page");
   assert.equal(launches, 2);
+});
+
+test("opening every board at once gives each board its own tab", async () => {
+  type FakePage = { url(): string; goto(target: string): Promise<null>; bringToFront(): Promise<void>; isClosed(): boolean };
+  const pages: FakePage[] = [];
+  const makePage = (): FakePage => {
+    let current = "about:blank";
+    const page: FakePage = {
+      url: () => current,
+      // Navigation commits later, so concurrent callers still see about:blank meanwhile.
+      goto: async target => { await new Promise(resolve => setTimeout(resolve, 10)); current = target; return null; },
+      bringToFront: async () => {}, isClosed: () => false,
+    };
+    pages.push(page);
+    return page;
+  };
+  makePage();
+  const ctx = { pages: () => [...pages], newPage: async () => makePage(), on: () => {}, close: async () => {} };
+  const access = createBrowserAccess(async () => ctx as unknown as BrowserContext);
+  await Promise.all([access.open("zhilian"), access.open("liepin"), access.open("job51")]);
+  assert.equal(pages.length, 3);
+  assert.deepEqual(pages.map(page => new URL(page.url()).hostname).sort(), ["login.51job.com", "www.liepin.com", "www.zhaopin.com"]);
 });
 
 for (const answer of ["accept", "decline", "unsupported"] as const) {

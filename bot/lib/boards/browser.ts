@@ -1,6 +1,6 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
-import type { BrowserContext } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { botjobHome } from "../state-store.js";
 import { jobUrlAllowed } from "../jd.js";
 import { SUPPORTED_BOARDS, type BoardId } from "./types.js";
@@ -15,6 +15,9 @@ const names = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
 export function createBrowserAccess(launch: () => Promise<BrowserContext>, render = readRenderedJobs, describe: () => LaunchInfo | undefined = () => launched) {
   // One window for every board, so the user never has to guess which window to log in to.
   let session: Promise<BrowserContext> | undefined;
+  const tabs = new Map<BoardId, Page>();
+  const claimed = new WeakSet<Page>();
+  let picking: Promise<unknown> = Promise.resolve();
   function context() {
     if (!session) {
       const pending = session = launch();
@@ -25,8 +28,17 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
   async function open(board: BoardId, url = homes[board]) {
     if (!SUPPORTED_BOARDS.includes(board) || !jobUrlAllowed(url, board)) throw new Error("登录链接必须属于所选招聘站。");
     const ctx = await context();
-    const existing = ctx.pages().find(page => jobUrlAllowed(page.url(), board)) ?? ctx.pages().find(page => page.url() === "about:blank");
-    const page = existing ?? await ctx.newPage();
+    // Tab choice is serialized: concurrent opens would otherwise grab the same blank tab before navigation commits.
+    const picked = picking.then(async () => {
+      const known = tabs.get(board);
+      if (known && !known.isClosed()) return known;
+      const page = ctx.pages().find(item => !claimed.has(item) && (jobUrlAllowed(item.url(), board) || item.url() === "about:blank")) ?? await ctx.newPage();
+      claimed.add(page);
+      tabs.set(board, page);
+      return page;
+    });
+    picking = picked.catch(() => undefined);
+    const page = await picked;
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.bringToFront();
     const info = describe();
