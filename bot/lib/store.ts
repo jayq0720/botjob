@@ -1,3 +1,4 @@
+import type { JobTime } from "./boards/freshness.js";
 /** Session-scoped keys for resume + application state in host.kv / host.files. */
 
 import type { ScoreBreakdown } from "./score.js";
@@ -34,11 +35,13 @@ export type ResumeProfile = {
 
 export type JdStatus = "detail" | "list_only" | "pasted";
 
-export type JobListing = {
+export type JobListing = JobTime & {
   id: string;
   board: BoardId;
   title: string;
   company: string;
+  companyIndustry?: string;
+  employerReview?: "needs_review" | "no_exclusion_evidence";
   city: string;
   salary?: string;
   experience?: string;
@@ -59,6 +62,9 @@ export type ApplicationRecord = {
     | "approved"
     | "denied"
     | "submitted_manual"
+    | "submitted_auto"
+    | "applying"
+    | "submission_unknown"
     | "skipped"
     | "failed";
   coverNote?: string;
@@ -67,6 +73,7 @@ export type ApplicationRecord = {
   createdAt: string;
   updatedAt: string;
   lastNote?: string;
+  delivery?: { attemptId: string; phase: string; at: string; evidence?: string };
 };
 
 export type CoverLetterRecord = {

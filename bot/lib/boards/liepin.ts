@@ -30,6 +30,7 @@ export function liepinSearch(criteria: SearchCriteria): BoardSearchPack {
   const city = criteria.cities[0] ?? "全国";
   const params = new URLSearchParams();
   params.set("key", query);
+  params.set("pubTime", "3");
   const slug = CITY_SLUG[city];
   const searchUrl = slug
     ? `https://www.liepin.com/city-${slug}/zhaopin/?${params.toString()}`

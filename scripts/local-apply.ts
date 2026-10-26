@@ -65,7 +65,7 @@ Usage:
 
 Keys per job (headed mode):
   a  mark applied (you already clicked apply / send in the browser)
-  c  try to click 申请 or 立即沟通 (asks again; BOSS may send the site's default greeting)
+  c  try to click 申请 or 立即沟通 (asks again)
   f  fill the greeting into a visible input (asks again; does not press send)
   p  copy the greeting to the clipboard
   l  copy the cover letter to the clipboard
@@ -125,7 +125,7 @@ async function main() {
   const results: ApplyRunResult[] = [];
 
   console.log(
-    `\nBrowser profile: ${args.profile}\n首次使用请在打开的窗口中登录智联/猎聘/51job/BOSS直聘，登录态会保留。\n只打开智联、猎聘、51job、BOSS 的 https 链接。\nBOSS 点「立即沟通」可能会立即发送平台默认招呼语，点击前会再确认。填入打招呼语不会按发送键。\n`,
+    `\nBrowser profile: ${args.profile}\n首次使用请在打开的窗口中登录智联/猎聘，登录态会保留。\n只打开智联、猎聘的 https 链接。\n点击前会再次确认。填入打招呼语不会按发送键。\n`,
   );
 
   let quit = false;
@@ -205,11 +205,9 @@ async function main() {
             if ((await loc.count()) === 0) continue;
             const visible = await loc.isVisible().catch(() => false);
             if (!visible) continue;
-            const bossNotice =
-              item.board === "boss" ? "可能会立即发送平台默认招呼语。" : "";
             const confirm = await prompt(
               rl,
-              `检测到「${sel}」。${bossNotice}确认点击？[y/N] > `,
+              `检测到「${sel}」。确认点击？[y/N] > `,
             );
             if (confirm === "y" || confirm === "yes") {
               await loc.click({ timeout: 5000 }).catch((e: unknown) => {

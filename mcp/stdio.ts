@@ -1,5 +1,6 @@
 import "./silence-stdout.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { browserAccess } from "../bot/lib/boards/browser.js";
 import { createBotjobServer } from "./server.js";
 
 process.on("uncaughtException", (err) => {
@@ -16,4 +17,5 @@ process.on("unhandledRejection", (reason) => {
 const server = createBotjobServer();
 const transport = new StdioServerTransport();
 await server.connect(transport);
+server.server.onclose = () => { void browserAccess.close(); };
 process.stderr.write("botjob-mcp stdio 已启动。日志只写 stderr。\n");

@@ -1,11 +1,11 @@
+import { excludedEmployer, employerReview } from "./employers.js";
+import { freshness, SEARCH_MAX_AGE_MS } from "./freshness.js";
+import { configureEnvironmentProxy, networkErrorMessage } from "../network.js";
 import type { BoardId, SearchCriteria } from "./types.js";
-import { bossCityCode, bossSearch } from "./boss.js";
-import { job51Search } from "./job51.js";
 import { liepinSearch } from "./liepin.js";
-import { zhilianSearch } from "./zhilian.js";
+import { zhilianSearch, ZHILIAN_CITY_ID } from "./zhilian.js";
 import { allowedJobUrl, type JobPosting } from "../jd.js";
 import {
-  parseBossApi,
   parseDetailHtml,
   parseSearchHtml,
   parseZhilianApi,
@@ -28,28 +28,22 @@ export type BoardFetchReport = {
   message: string;
   listings: JobPosting[];
   detailErrors: string[];
+  pendingEmployerReview?: JobPosting[];
+  excludedEmployers?: { insurance: number; labor_dispatch: number };
+  userActions?: Array<{ board: BoardId; reason: FetchReason; url: string; message: string }>;
+  limits?: { maxListings: number; maxCandidates: number; maxDetails: number; truncated: boolean };
+  freshness?: { maxAgeDays: 3; checkedAt: string; since: string; excludedOld: number; excludedUnknown: number };
 };
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const MAX_LISTINGS = 5;
-const MAX_DETAILS = 3;
+const MAX_DETAILS = 5;
+const MAX_CANDIDATES = 20;
 const MAX_REDIRECTS = 5;
 /** Same cap the old buffered read used, in decimal bytes. */
 const MAX_BODY_BYTES = 2_000_000;
-
-const ZHILIAN_CITY_ID: Record<string, string> = {
-  北京: "530",
-  上海: "538",
-  广州: "763",
-  深圳: "765",
-  杭州: "653",
-  成都: "801",
-  南京: "635",
-  武汉: "736",
-  西安: "854",
-};
 
 export function classifyFetch(input: {
   status: number;
@@ -58,7 +52,11 @@ export function classifyFetch(input: {
 }): { blocked: false } | { blocked: true; reason: FetchReason; message: string } {
   const body = input.body.slice(0, 20_000);
   const url = input.finalUrl;
-  if (input.status === 401 || input.status === 403) {
+  const visibleText = input.body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<[^>]+>/g, "");
+  if (input.status === 401 || /(?:登录|登陆)后(?:即可|可以|可|才能)?(?:查看|浏览|解锁|获取)(?:更多|全部|完整)?(?:职位|岗位|招聘|内容|信息)/.test(visibleText)) {
+    return { blocked: true, reason: "login_required", message: "需要登录才能查看更多岗位。请先登录自己的账号，完成后继续搜索。" };
+  }
+  if (input.status === 403) {
     return {
       blocked: true,
       reason: "blocked",
@@ -101,18 +99,20 @@ export function classifyFetch(input: {
     return {
       blocked: true,
       reason: "login_required",
-      message: "页面要求登录后才能看岗位。不会代登录。",
+      message: "页面要求登录后才能看岗位。请登录自己的账号后继续搜索。",
     };
   }
   return { blocked: false };
 }
 
-type Fetched = {
+export type Fetched = {
   status: number;
   finalUrl: string;
   body: string;
   contentType: string;
 };
+
+export type PageReader = (url: string) => Promise<Fetched | { error: string }>;
 
 const FETCH_HEADERS = {
   "user-agent": UA,
@@ -168,10 +168,11 @@ async function readLimitedBody(response: Response): Promise<string> {
 /** Fetch one allowlisted https URL. Redirects are checked one hop at a time. */
 export async function fetchText(url: string): Promise<Fetched | { error: string }> {
   if (!allowedJobUrl(url)) {
-    return { error: "只抓取智联、猎聘、51job、BOSS 的 https 页面。" };
+    return { error: "只抓取智联、猎聘 的 https 页面。" };
   }
   let current = url;
   try {
+    configureEnvironmentProxy();
     for (let redirects = 0; ; redirects++) {
       const response = await fetch(current, {
         redirect: "manual",
@@ -207,8 +208,7 @@ export async function fetchText(url: string): Promise<Fetched | { error: string 
       };
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: message };
+    return { error: networkErrorMessage(err) };
   }
 }
 
@@ -218,19 +218,21 @@ function searchPack(board: BoardId, criteria: SearchCriteria) {
       return zhilianSearch(criteria);
     case "liepin":
       return liepinSearch(criteria);
-    case "job51":
-      return job51Search(criteria);
-    case "boss":
-      return bossSearch(criteria);
+    default:
+      throw new Error("仅支持智联和猎聘。");
   }
 }
 
 export async function fetchBoard(
   board: BoardId,
   criteria: SearchCriteria,
+  options: { read?: PageReader; limit?: number } = {},
 ): Promise<BoardFetchReport> {
+  const read = options.read ?? fetchText;
+  const limit = Math.max(1, Math.min(20, options.limit ?? MAX_LISTINGS));
+  const now = Date.now();
   const pack = searchPack(board, criteria);
-  const fetched = await fetchText(pack.searchUrl);
+  const fetched = await read(pack.searchUrl);
   if ("error" in fetched) {
     return {
       board,
@@ -243,23 +245,25 @@ export async function fetchBoard(
   }
   const gate = classifyFetch(fetched);
   let listings: JobPosting[] = [];
-  if (!gate.blocked) {
+  const userActions: NonNullable<BoardFetchReport["userActions"]> = gate.blocked && ["login_required", "captcha", "blocked"].includes(gate.reason)
+    ? [{ board, reason: gate.reason, url: pack.searchUrl, message: gate.message }] : [];
+  if (!gate.blocked || gate.reason === "login_required") {
     if (fetched.contentType.includes("json") || fetched.body.trim().startsWith("{")) {
       listings = jobsFromJson(board, fetched.body);
     }
     if (listings.length === 0) {
-      listings = parseSearchHtml(board, fetched.body, fetched.finalUrl);
+      listings = parseSearchHtml(board, fetched.body, fetched.finalUrl, now);
     }
   }
   let apiFailure: { reason: FetchReason; message: string } | undefined;
-  if (listings.length === 0 && (board === "boss" || board === "zhilian")) {
+  if (listings.length === 0 && board === "zhilian" && !gate.blocked && !options.read) {
     const api = await fetchJsonApi(board, criteria);
     if (api.ok) listings = api.jobs;
     else apiFailure = { reason: api.reason, message: api.message };
   }
   if (listings.length === 0) {
     if (gate.blocked) {
-      return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [] };
+      return { board, ok: false, reason: gate.reason, message: gate.message, listings: [], detailErrors: [], userActions };
     }
     if (
       apiFailure?.reason === "empty" &&
@@ -286,28 +290,54 @@ export async function fetchBoard(
       detailErrors: [],
     };
   }
-  const sliced = listings.slice(0, MAX_LISTINGS);
-  const { jobs, detailErrors } = await enrichDetails(board, sliced);
+  const candidates = listings.slice(0, MAX_CANDIDATES);
+  const knownOld = candidates.filter((job) => freshness(job, now) === "old").length;
+  const excludedEmployers = { insurance: 0, labor_dispatch: 0 };
+  const allowEmployer = (job: JobPosting) => {
+    const reason = excludedEmployer(job);
+    if (reason) excludedEmployers[reason]++;
+    return !reason;
+  };
+  const eligible = candidates.filter((job) => freshness(job, now) !== "old").filter(allowEmployer);
+  const detailBudget = gate.blocked ? 0 : Math.max(MAX_DETAILS, limit);
+  const { jobs: enriched, detailErrors, userActions: detailActions } = await enrichDetails(board, eligible, now, read, detailBudget);
+  const jobs = enriched.filter(allowEmployer);
+  const timely = jobs.filter((job) => freshness(job, now) === "recent")
+    .sort((a, b) => Date.parse(b.sourceUpdatedAt!) - Date.parse(a.sourceUpdatedAt!))
+    .map(job => ({ ...job, employerReview: employerReview(job) }));
+  const pendingEmployerReview = timely.filter(job => job.employerReview === "needs_review");
+  const recent = timely.filter(job => job.employerReview !== "needs_review").slice(0, limit);
+  const excludedOld = knownOld + jobs.filter((job) => freshness(job, now) === "old").length;
+  const excludedUnknown = jobs.filter((job) => freshness(job, now) === "unknown").length;
   return {
     board,
-    ok: true,
-    message: `解析到 ${jobs.length} 个岗位。`,
-    listings: jobs,
+    ok: recent.length > 0,
+    reason: recent.length ? undefined : "empty",
+    message: `最近72小时内可确认发布或更新的岗位 ${recent.length} 个；排除过期 ${excludedOld} 个、时间无法确认 ${excludedUnknown} 个；剔除保险公司 ${excludedEmployers.insurance} 个、劳务派遣公司 ${excludedEmployers.labor_dispatch} 个；公司性质待核实 ${pendingEmployerReview.length} 个，暂不推荐。`,
+    listings: recent,
     detailErrors,
+    excludedEmployers,
+    pendingEmployerReview,
+    userActions: [...userActions, ...detailActions],
+    limits: { maxListings: limit, maxCandidates: MAX_CANDIDATES, maxDetails: detailBudget, truncated: listings.length > MAX_CANDIDATES || jobs.filter(job => freshness(job, now) === "recent").length > limit },
+    freshness: { maxAgeDays: 3, checkedAt: new Date(now).toISOString(),
+      since: new Date(now - SEARCH_MAX_AGE_MS).toISOString(), excludedOld, excludedUnknown },
   };
 }
 
 export async function fetchJobUrl(
   url: string,
   board: BoardId,
+  now = Date.now(),
+  read: PageReader = fetchText,
 ): Promise<{ ok: true; job: JobPosting } | { ok: false; reason: FetchReason; message: string }> {
-  const fetched = await fetchText(url);
+  const fetched = await read(url);
   if ("error" in fetched) {
     return { ok: false, reason: "network", message: `抓取岗位页失败：${fetched.error}` };
   }
   const gate = classifyFetch(fetched);
   if (gate.blocked) return { ok: false, reason: gate.reason, message: gate.message };
-  const job = parseDetailHtml(board, fetched.body, fetched.finalUrl);
+  const job = parseDetailHtml(board, fetched.body, fetched.finalUrl, now);
   if (!job || job.description.length < 20) {
     return {
       ok: false,
@@ -321,43 +351,52 @@ export async function fetchJobUrl(
 async function enrichDetails(
   board: BoardId,
   listings: JobPosting[],
-): Promise<{ jobs: JobPosting[]; detailErrors: string[] }> {
+  now: number,
+  read: PageReader,
+  maxDetails: number,
+): Promise<{ jobs: JobPosting[]; detailErrors: string[]; userActions: NonNullable<BoardFetchReport["userActions"]> }> {
+  const userActions: NonNullable<BoardFetchReport["userActions"]> = [];
   const detailErrors: string[] = [];
   const jobs: JobPosting[] = [];
   for (const [index, listing] of listings.entries()) {
-    if (index >= MAX_DETAILS || listing.jdStatus === "detail" || !listing.url) {
+    if (index >= maxDetails || listing.jdStatus === "detail" || !listing.url) {
       jobs.push(listing);
       continue;
     }
-    const detail = await fetchJobUrl(listing.url, board);
+    const detail = await fetchJobUrl(listing.url, board, now, read);
     if (!detail.ok) {
       detailErrors.push(`${listing.url}：${detail.message}`);
+      if (["login_required", "captcha", "blocked"].includes(detail.reason)) userActions.push({ board, reason: detail.reason, url: listing.url, message: detail.message });
       jobs.push(listing);
+      if (["login_required", "captcha", "blocked"].includes(detail.reason)) {
+        jobs.push(...listings.slice(index + 1));
+        break;
+      }
       continue;
     }
     jobs.push({
       ...listing,
       ...detail.job,
       title: detail.job.title || listing.title,
-      company: detail.job.company || listing.company,
+      company: detail.job.company && detail.job.company !== "（未提供）" ? detail.job.company : listing.company,
+      companyIndustry: detail.job.companyIndustry || listing.companyIndustry,
       city: detail.job.city || listing.city,
       salary: detail.job.salary || listing.salary,
       experience: detail.job.experience || listing.experience,
       education: detail.job.education || listing.education,
+      sourceUpdatedAt: detail.job.sourceTimeText ? detail.job.sourceUpdatedAt : listing.sourceUpdatedAt,
+      sourceTimeText: detail.job.sourceTimeText || listing.sourceTimeText,
+      sourceTimeKind: detail.job.sourceTimeKind || listing.sourceTimeKind,
       url: listing.url,
       jdStatus: "detail",
     });
   }
-  return { jobs, detailErrors };
+  return { jobs, detailErrors, userActions };
 }
 
 function jobsFromJson(board: BoardId, body: string): JobPosting[] {
   try {
     const payload = JSON.parse(body) as unknown;
-    if (board === "boss") {
-      const parsed = parseBossApi(payload);
-      return parsed.ok ? parsed.jobs : [];
-    }
     if (board === "zhilian") {
       const parsed = parseZhilianApi(payload);
       return parsed.ok ? parsed.jobs : [];
@@ -377,10 +416,7 @@ async function fetchJsonApi(
 > {
   const query = criteria.titles[0] || criteria.keywords[0] || "";
   const city = criteria.cities[0] ?? "全国";
-  const url =
-    board === "boss"
-      ? bossApiUrl(query, city)
-      : zhilianApiUrl(query, city);
+  const url = zhilianApiUrl(query, city);
   const fetched = await fetchText(url);
   if ("error" in fetched) {
     return { ok: false, reason: "network", message: fetched.error };
@@ -389,21 +425,10 @@ async function fetchJsonApi(
   if (gate.blocked) return { ok: false, reason: gate.reason, message: gate.message };
   try {
     const payload = JSON.parse(fetched.body) as unknown;
-    return board === "boss" ? parseBossApi(payload) : parseZhilianApi(payload);
+    return parseZhilianApi(payload);
   } catch {
     return { ok: false, reason: "parse_error", message: "公开接口返回的不是 JSON。" };
   }
-}
-
-function bossApiUrl(query: string, city: string): string {
-  const params = new URLSearchParams();
-  params.set("scene", "1");
-  params.set("query", query);
-  params.set("page", "1");
-  params.set("pageSize", "15");
-  const code = bossCityCode(city);
-  if (code) params.set("city", code);
-  return `https://www.zhipin.com/wapi/zpgeek/search/joblist.json?${params.toString()}`;
 }
 
 function zhilianApiUrl(query: string, city: string): string {

@@ -127,13 +127,13 @@ test("local apply checks the URL before goto and before filling", () => {
   assert.throws(() => assertApplyTarget(evil, "fill"), /拒绝在该页面填入打招呼语/);
   assert.doesNotThrow(() =>
     assertApplyTarget(
-      { url: "https://www.zhipin.com/job_detail/abc.html", board: "boss" },
+      { url: "https://www.liepin.com/job/abc.shtml", board: "liepin" },
       "goto",
     ),
   );
   assert.doesNotThrow(() =>
     assertApplyTarget(
-      { url: "https://www.zhipin.com/job_detail/abc.html", board: "boss" },
+      { url: "https://www.liepin.com/job/abc.shtml", board: "liepin" },
       "fill",
     ),
   );

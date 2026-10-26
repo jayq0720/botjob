@@ -1,11 +1,14 @@
+import type { JobTime } from "./boards/freshness.js";
 import { createHash } from "node:crypto";
 import type { BoardId, JdStatus, JobListing, ResumeProfile } from "./store.js";
 import { scoreJob, type ScoreBreakdown } from "./score.js";
 
-export type JobPosting = {
+export type JobPosting = JobTime & {
   board: BoardId;
   title: string;
   company: string;
+  companyIndustry?: string;
+  employerReview?: "needs_review" | "no_exclusion_evidence";
   city: string;
   salary?: string;
   experience?: string;
@@ -32,8 +35,6 @@ export function boardFromUrl(url: string): BoardId | undefined {
   }
   if (host === "zhaopin.com" || host.endsWith(".zhaopin.com")) return "zhilian";
   if (host === "liepin.com" || host.endsWith(".liepin.com")) return "liepin";
-  if (host === "51job.com" || host.endsWith(".51job.com")) return "job51";
-  if (host === "zhipin.com" || host.endsWith(".zhipin.com")) return "boss";
   return undefined;
 }
 
@@ -54,9 +55,8 @@ export function jobUrlAllowed(url: string, board: BoardId): boolean {
 }
 
 /**
- * Posting identity. All four boards put the job id in the path, not the query:
+ * Posting identity. Both boards put the job id in the path, not the query:
  * 智联 `/jobdetail/{id}.htm`, 猎聘 `/job/{id}.shtml`,
- * 51job `/{city}/{id}.html`, BOSS `/job_detail/{id}.html`.
  * Host is lowercased, the query and fragment are dropped, and a trailing slash is removed.
  */
 export function canonicalJobUrl(url: string): string {
@@ -75,7 +75,7 @@ export function listingFromPosting(
 ): JobListing {
   if (!jobUrlAllowed(posting.url, posting.board)) {
     throw new Error(
-      "岗位 URL 必须是该 board 对应站点的 https 链接（智联 zhaopin.com、猎聘 liepin.com、51job.com、BOSS zhipin.com）。",
+      "岗位 URL 必须是该 board 对应站点的 https 链接（智联 zhaopin.com、猎聘 liepin.com）。",
     );
   }
   const score: ScoreBreakdown = scoreJob(profile, posting);
@@ -85,6 +85,8 @@ export function listingFromPosting(
     board: posting.board,
     title: posting.title,
     company: posting.company || "（未提供）",
+    companyIndustry: posting.companyIndustry,
+    employerReview: posting.employerReview,
     city: posting.city,
     salary: posting.salary,
     experience: posting.experience,
@@ -92,6 +94,9 @@ export function listingFromPosting(
     description: posting.description || undefined,
     url: posting.url,
     jdStatus: posting.jdStatus,
+    sourceUpdatedAt: posting.sourceUpdatedAt,
+    sourceTimeText: posting.sourceTimeText,
+    sourceTimeKind: posting.sourceTimeKind,
     matchScore: score.total,
     matchReason: score.summary,
     score,

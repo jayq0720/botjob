@@ -31,7 +31,7 @@ export default defineEval({
             "请按顺序处理，不要访问招聘网站（search_jobs 不要把 attemptFetch 设为 true）。",
             "1. 保存下面的简历并分析画像。",
             "2. 调用 search_jobs。",
-            "3. 用我贴的 JD 调用 score_job（board=boss）。",
+            "3. 用我贴的 JD 调用 score_job（board=liepin）。",
             "4. 为这个岗位写约 150 字打招呼语和一封求职信，调用 save_cover_letter。",
             "5. 调用 queue_apply 排队，等我批准。",
             "",

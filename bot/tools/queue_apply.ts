@@ -7,7 +7,7 @@ import { jobUrlAllowed } from "../lib/jd.js";
 export const queueJobSchema = z
   .object({
     id: z.string(),
-    board: z.enum(["zhilian", "liepin", "job51", "boss"]),
+    board: z.enum(["zhilian", "liepin"]),
     title: z.string(),
     company: z.string(),
     city: z.string(),
@@ -21,7 +21,7 @@ export const queueJobSchema = z
   })
   .refine((job) => jobUrlAllowed(job.url, job.board), {
     message:
-      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com、51job.com、zhipin.com），且域名与 board 一致。",
+      "url 必须是该 board 的 https 链接（zhaopin.com、liepin.com），且域名与 board 一致。",
     path: ["url"],
   });
 

@@ -15,12 +15,12 @@ test("session keys and job/letter upserts", () => {
   assert.equal(applicationsKey("s1"), "apps:s1");
 
   const job: JobListing = {
-    id: "boss-1",
-    board: "boss",
+    id: "liepin-1",
+    board: "liepin",
     title: "前端",
     company: "云桥",
     city: "上海",
-    url: "https://www.zhipin.com/job_detail/1.html",
+    url: "https://www.liepin.com/job/1.html",
     matchReason: "综合 80 分",
     matchScore: 80,
   };
@@ -29,7 +29,7 @@ test("session keys and job/letter upserts", () => {
   assert.equal(stored[0]?.matchScore, 88);
 
   const letters = upsertLetter([], {
-    jobId: "boss-1",
+    jobId: "liepin-1",
     greeting: "您好",
     coverLetter: "这是一封足够长的求职信正文，用来说明匹配点。",
     updatedAt: "2026-10-18T00:00:00.000Z",

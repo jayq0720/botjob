@@ -9,11 +9,11 @@ export default defineEval({
   cases: [
     {
       id: "save-and-search",
-      description: "Paste resume → profile → search three boards.",
+      description: "Paste resume → profile → search two boards.",
       async test(t) {
         await t.send(
           [
-            "这是我的简历，请分析并帮我在智联、猎聘、51job找合适岗位。",
+            "这是我的简历，请分析并帮我在智联、猎聘找合适岗位。",
             "",
             "姓名：张三",
             "求职意向：高级前端工程师 / 上海",

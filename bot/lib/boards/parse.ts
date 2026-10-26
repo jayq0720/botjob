@@ -1,3 +1,4 @@
+import { jobTime, type JobTime } from "./freshness.js";
 import type { BoardId } from "./types.js";
 import { jobUrlAllowed, type JobPosting } from "../jd.js";
 
@@ -94,10 +95,11 @@ function pickExpEdu(labels: string[]): { experience?: string; education?: string
   return { experience, education };
 }
 
-function posting(input: {
+function posting(input: JobTime & {
   board: BoardId;
   title?: string;
   company?: string;
+  companyIndustry?: string;
   city?: string;
   salary?: string;
   experience?: string;
@@ -112,6 +114,7 @@ function posting(input: {
     board: input.board,
     title: input.title,
     company: input.company || "（未提供）",
+    companyIndustry: input.companyIndustry,
     city: input.city || "",
     salary: input.salary,
     experience: input.experience,
@@ -119,6 +122,9 @@ function posting(input: {
     description,
     url: input.url,
     jdStatus: input.jdStatus ?? (description.length >= 20 ? "detail" : "list_only"),
+    sourceUpdatedAt: input.sourceUpdatedAt,
+    sourceTimeText: input.sourceTimeText,
+    sourceTimeKind: input.sourceTimeKind,
   };
 }
 
@@ -126,16 +132,13 @@ export function parseSearchHtml(
   board: BoardId,
   html: string,
   pageUrl: string,
+  now = Date.now(),
 ): JobPosting[] {
   switch (board) {
     case "zhilian":
-      return parseZhilianSearch(html, pageUrl);
+      return parseZhilianSearch(html, pageUrl, now);
     case "liepin":
       return parseLiepinSearch(html, pageUrl);
-    case "job51":
-      return parseJob51Search(html, pageUrl);
-    case "boss":
-      return parseBossSearch(html, pageUrl);
   }
 }
 
@@ -143,21 +146,42 @@ export function parseDetailHtml(
   board: BoardId,
   html: string,
   pageUrl: string,
+  now = Date.now(),
 ): JobPosting | undefined {
   const fromLd = jobPostingsFromJsonLd(html, pageUrl, board).find(
     (job) => job.description.length >= 20,
   );
-  if (fromLd) return fromLd;
-  switch (board) {
-    case "zhilian":
-      return parseZhilianDetail(html, pageUrl);
-    case "liepin":
-      return parseLiepinDetail(html, pageUrl);
-    case "job51":
-      return parseJob51Detail(html, pageUrl);
-    case "boss":
-      return parseBossDetail(html, pageUrl);
+  const job = fromLd ?? (board === "zhilian"
+    ? parseZhilianDetail(html, pageUrl) : parseLiepinDetail(html, pageUrl));
+  if (!job) return undefined;
+  if (board === "liepin") {
+    // Only the job's own update label, never footer SEO dates or recruiter activity.
+    const updated = textByClass(html, "update-time");
+    return updated ? { ...job, ...jobTime(updated, "updated", now) } : job;
   }
+  const state = initialState(html);
+  const detail = isRecord(state?.jobDetail) ? state.jobDetail : undefined;
+  const position = isRecord(detail?.detailedPosition) ? detail.detailedPosition : undefined;
+  const number = pageUrl.match(/\/([^/.]+)\.htm(?:[?#]|$)/)?.[1];
+  return position && number === position.number ? { ...job, ...positionTime(position, now) } : job;
+}
+
+function initialState(html: string): Record<string, unknown> | undefined {
+  for (const match of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = match[1].trim();
+    if (!body.startsWith("__INITIAL_STATE__=")) continue;
+    try {
+      const value: unknown = JSON.parse(body.slice("__INITIAL_STATE__=".length).replace(/;\s*$/, ""));
+      if (isRecord(value)) return value;
+    } catch { /* Unreadable source data is not evidence of a recent update. */ }
+  }
+  return undefined;
+}
+
+function positionTime(position: Record<string, unknown>, now: number): JobTime {
+  const updated = asString(position.positionUpdateTime) || asString(position.updateTime);
+  if (updated) return jobTime(updated, "updated", now);
+  return jobTime(asString(position.positionPublishTime) || asString(position.publishTime), "published", now);
 }
 
 function splitChunks(html: string, marker: string): string[] {
@@ -183,6 +207,7 @@ function parseLiepinSearch(html: string, pageUrl: string): JobPosting[] {
       board: "liepin",
       title: title ? decodeEntities(title) : undefined,
       company: company ? decodeEntities(company) : undefined,
+      companyIndustry: textByClass(chunk, "company-tags-box"),
       city: city ? decodeEntities(city) : undefined,
       salary: salary ? decodeEntities(salary) : undefined,
       ...expEdu,
@@ -194,8 +219,19 @@ function parseLiepinSearch(html: string, pageUrl: string): JobPosting[] {
   return jobs;
 }
 
-function parseZhilianSearch(html: string, pageUrl: string): JobPosting[] {
+function zhilianCompanyIndustry(chunk: string): string | undefined {
+  const tags = chunk.split('class="companyinfo__tag"')[1]?.split('class="companyinfo__staff"')[0] ?? "";
+  return [...tags.matchAll(/class="joblist-box__item-tag"[^>]*>([\s\S]*?)<\/div>/g)]
+    .map(match => plain(match[1]))
+    .filter(text => !/\d.*人|民营|国企|上市|合资|外商/.test(text))
+    .join("、") || undefined;
+}
+
+function parseZhilianSearch(html: string, pageUrl: string, now: number): JobPosting[] {
   const jobs: JobPosting[] = [];
+  const state = initialState(html);
+  const positions = Array.isArray(state?.positionList) ? state.positionList.filter(isRecord) : [];
+  const byNumber = new Map(positions.map((item) => [item.number, item]));
   // "joblist-box__item" is also a prefix of iteminfo / item-tag, so split on the card class only.
   const parts = html.split(/class="joblist-box__item(?:\s|")/);
   for (const chunk of parts.slice(1)) {
@@ -219,65 +255,18 @@ function parseZhilianSearch(html: string, pageUrl: string): JobPosting[] {
       board: "zhilian",
       title: name.text,
       company: company.text,
+      companyIndustry: zhilianCompanyIndustry(chunk),
       city,
       salary: salary ? plain(salary) : undefined,
       ...expEdu,
       url: name.href ? absUrl(name.href, pageUrl) : undefined,
       jdStatus: "list_only",
     });
-    if (job) jobs.push(job);
-  }
-  return jobs;
-}
-
-function parseJob51Search(html: string, pageUrl: string): JobPosting[] {
-  const jobs: JobPosting[] = [];
-  for (const chunk of splitChunks(html, "joblist-item")) {
-    const link = chunk.match(/class="jname[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)</);
-    const company = chunk.match(/class="cname[^"]*"[^>]*>([^<]+)</)?.[1];
-    const salary = chunk.match(/class="sal[^"]*"[^>]*>([^<]+)</)?.[1];
-    const city = chunk.match(/class="area[^"]*"[^>]*>([^<]+)</)?.[1];
-    const experience = chunk.match(/class="exp[^"]*"[^>]*>([^<]+)</)?.[1];
-    const education = chunk.match(/class="edu[^"]*"[^>]*>([^<]+)</)?.[1];
-    const job = posting({
-      board: "job51",
-      title: link ? decodeEntities(link[2]) : undefined,
-      company: company ? decodeEntities(company) : undefined,
-      city: city ? decodeEntities(city) : undefined,
-      salary: salary ? decodeEntities(salary) : undefined,
-      experience: experience ? decodeEntities(experience) : undefined,
-      education: education ? decodeEntities(education) : undefined,
-      url: link ? absUrl(link[1], pageUrl) : undefined,
-      jdStatus: "list_only",
-    });
-    if (job) jobs.push(job);
-  }
-  return jobs;
-}
-
-function parseBossSearch(html: string, pageUrl: string): JobPosting[] {
-  const jobs: JobPosting[] = [];
-  for (const chunk of splitChunks(html, "job-card-wrapper")) {
-    const title = chunk.match(/class="job-name"[^>]*>([^<]+)</)?.[1];
-    const salary = chunk.match(/class="salary"[^>]*>([^<]+)</)?.[1];
-    const city = chunk.match(/class="job-area"[^>]*>([^<]+)</)?.[1];
-    const company = chunk.match(
-      /class="company-name"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/,
-    )?.[1];
-    const href = chunk.match(/href="([^"]*job_detail[^"]+)"/)?.[1];
-    const tags = [...chunk.matchAll(/<li>([^<]+)<\/li>/g)].map((m) => m[1]);
-    const expEdu = pickExpEdu(tags);
-    const job = posting({
-      board: "boss",
-      title: title ? decodeEntities(title) : undefined,
-      company: company ? decodeEntities(company) : undefined,
-      city: city ? decodeEntities(city) : undefined,
-      salary: salary ? decodeEntities(salary) : undefined,
-      ...expEdu,
-      url: href ? absUrl(href, pageUrl) : undefined,
-      jdStatus: "list_only",
-    });
-    if (job) jobs.push(job);
+    if (job) {
+      const number = job.url.match(/\/([^/.]+)\.htm(?:[?#]|$)/)?.[1];
+      const position = byNumber.get(number);
+      jobs.push(position ? { ...job, ...positionTime(position, now) } : job);
+    }
   }
   return jobs;
 }
@@ -339,50 +328,6 @@ function parseLiepinDetail(html: string, pageUrl: string): JobPosting | undefine
   });
 }
 
-function parseJob51Detail(html: string, pageUrl: string): JobPosting | undefined {
-  const title = html.match(/<h1[^>]*>([^<]+)<\/h1>/)?.[1];
-  const salary = html.match(/<strong>([^<]+)<\/strong>/)?.[1];
-  const company = html.match(/class="catn"[^>]*>([^<]+)</)?.[1];
-  const city = html.match(/class="msg[^"]*"[^>]*>([^<]+)</)?.[1];
-  const spans = [...html.matchAll(/class="sp4"[^>]*>([^<]+)</g)].map((m) => decodeEntities(m[1]));
-  const expEdu = pickExpEdu(spans);
-  const description = html.match(/class="[^"]*\bjob_msg\b[^"]*"[^>]*>([\s\S]*?)<\/div>/)?.[1];
-  return posting({
-    board: "job51",
-    title: title ? decodeEntities(title) : undefined,
-    company: company ? decodeEntities(company) : undefined,
-    city: city ? decodeEntities(city) : undefined,
-    salary: salary ? decodeEntities(salary) : undefined,
-    ...expEdu,
-    description: description ? plain(description) : undefined,
-    url: pageUrl,
-  });
-}
-
-function parseBossDetail(html: string, pageUrl: string): JobPosting | undefined {
-  const title = html.match(/<h1[^>]*>([^<]+)<\/h1>/)?.[1];
-  const salary = html.match(/class="salary"[^>]*>([^<]+)</)?.[1];
-  const company =
-    html.match(/class="company-name"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/)?.[1] ??
-    html.match(/class="company-name"[^>]*>([^<]+)</)?.[1];
-  const req = [...html.matchAll(/class="job-req"[\s\S]*?<\/p>/g)].flatMap((block) =>
-    [...block[0].matchAll(/<span>([^<]+)<\/span>/g)].map((m) => decodeEntities(m[1])),
-  );
-  const expEdu = pickExpEdu(req);
-  const city = req.find((item) => item !== expEdu.experience && item !== expEdu.education);
-  const description = html.match(/class="job-sec-text"[^>]*>([\s\S]*?)<\/div>/)?.[1];
-  return posting({
-    board: "boss",
-    title: title ? decodeEntities(title) : undefined,
-    company: company ? decodeEntities(company) : undefined,
-    city,
-    salary: salary ? decodeEntities(salary) : undefined,
-    ...expEdu,
-    description: description ? plain(description) : undefined,
-    url: pageUrl,
-  });
-}
-
 function jobPostingsFromJsonLd(
   html: string,
   pageUrl: string,
@@ -422,11 +367,13 @@ function fromJobPostingLd(
     board,
     title: asString(node.title),
     company: asString(org?.name),
+    companyIndustry: asString(node.industry),
     city,
     salary: salaryFromLd(node.baseSalary),
     experience: asString(node.experienceRequirements),
     education: asString(node.educationRequirements),
     description: asString(node.description),
+    ...jobTime(asString(node.dateModified) || asString(node.datePosted), asString(node.dateModified) ? "updated" : "published"),
     url: jobUrlAllowed(asString(node.url) ?? "", board)
       ? asString(node.url)
       : jobUrlAllowed(pageUrl, board)
@@ -448,52 +395,6 @@ function salaryFromLd(value: unknown): string | undefined {
     return `${Math.round(min / 10000)}-${Math.round(max / 10000)}万/年`;
   }
   return `${min}-${max}`;
-}
-
-export function parseBossApi(payload: unknown): ApiParse {
-  if (!isRecord(payload)) {
-    return { ok: false, reason: "parse_error", message: "BOSS 接口不是 JSON 对象。" };
-  }
-  const code = Number(payload.code);
-  const message = asString(payload.message) ?? "";
-  if (code === 37 || /异常|登录|安全/.test(message)) {
-    return {
-      ok: false,
-      reason: "blocked",
-      message: message
-        ? `BOSS 接口拒绝公开读取：${message} 不会代为通过安全校验。`
-        : "BOSS 接口拒绝公开读取。不会代为通过安全校验。",
-    };
-  }
-  if (code !== 0) {
-    return {
-      ok: false,
-      reason: "parse_error",
-      message: `BOSS 接口返回 code=${String(payload.code)} ${message}`.trim(),
-    };
-  }
-  const data = isRecord(payload.zpData) ? payload.zpData : undefined;
-  const list = data && Array.isArray(data.jobList) ? data.jobList : [];
-  const jobs = list.flatMap((item) => {
-    if (!isRecord(item)) return [];
-    const id = asString(item.encryptJobId);
-    const job = posting({
-      board: "boss",
-      title: asString(item.jobName),
-      company: asString(item.brandName),
-      city: asString(item.cityName),
-      salary: asString(item.salaryDesc),
-      experience: asString(item.jobExperience),
-      education: asString(item.jobDegree),
-      description: asString(item.postDescription),
-      url: id ? `https://www.zhipin.com/job_detail/${id}.html` : undefined,
-    });
-    return job ? [job] : [];
-  });
-  if (jobs.length === 0) {
-    return { ok: false, reason: "empty", message: "BOSS 接口没有返回岗位列表。" };
-  }
-  return { ok: true, jobs };
 }
 
 export function parseZhilianApi(payload: unknown): ApiParse {
@@ -521,11 +422,13 @@ export function parseZhilianApi(payload: unknown): ApiParse {
       board: "zhilian",
       title: asString(item.jobName) || asString(item.name),
       company: asString(item.companyName),
+      companyIndustry: asString(item.industryName),
       city,
       salary: asString(item.salary),
       experience: exp,
       education: edu,
       description: asString(item.jobSummary),
+      ...positionTime(item, Date.now()),
       url: [asString(item.positionURL), asString(item.positionUrl)].find((value) =>
         value ? jobUrlAllowed(value, "zhilian") : false,
       ),

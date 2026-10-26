@@ -8,13 +8,13 @@ import {
 } from "../bot/lib/apply-pack.js";
 import type { ApplicationRecord } from "../bot/lib/store.js";
 
-test("apply pack keeps greeting, letter, and boss jobs", () => {
-  const raw = readFileSync(new URL("../fixtures/sample-apply-pack-boss.json", import.meta.url), "utf8");
+test("apply pack keeps greeting, letter, and liepin jobs", () => {
+  const raw = readFileSync(new URL("../fixtures/sample-apply-pack-liepin.json", import.meta.url), "utf8");
   const pack = parseApplyPack(raw);
-  assert.equal(pack.items[0]?.board, "boss");
+  assert.equal(pack.items[0]?.board, "liepin");
   assert.ok(pack.items[0]?.greeting);
   assert.ok((pack.items[0]?.greeting?.length ?? 0) <= 200);
-  assert.match(boardApplyHints.boss.selectors.join(" "), /立即沟通/);
+  assert.match(boardApplyHints.liepin.selectors.join(" "), /立即沟通/);
 
   const app: ApplicationRecord = {
     id: "app-1",
@@ -24,13 +24,13 @@ test("apply pack keeps greeting, letter, and boss jobs", () => {
     greeting: "您好，想沟通一下这个前端岗位。",
     coverLetter: "我有 6 年前端经验，熟悉 React 和 TypeScript，希望进一步沟通。",
     job: {
-      id: "boss-abc",
-      board: "boss",
+      id: "liepin-abc",
+      board: "liepin",
       title: "资深前端工程师",
       company: "云桥网络",
       city: "上海",
       salary: "30-50K",
-      url: "https://www.zhipin.com/job_detail/abc123.html",
+      url: "https://www.liepin.com/job/abc123.html",
       matchReason: "综合 90 分",
       matchScore: 90,
     },

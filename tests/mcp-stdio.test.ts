@@ -20,14 +20,18 @@ const detailHtml = path.join(root, "fixtures/html/zhilian-detail.html");
 const jobUrl = "https://www.zhaopin.com/jobdetail/CC001.htm";
 
 const TOOL_NAMES = [
+  "get_workspace",
+  "list_jobs",
   "save_resume",
   "get_resume",
   "save_resume_profile",
   "search_jobs",
+  "open_job_login",
   "score_job",
   "save_cover_letter",
   "queue_apply",
   "approve_apply",
+  "apply_jobs",
   "list_applications",
   "export_apply_pack",
   "mark_applied",
@@ -111,6 +115,9 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     const names = listed.tools.map((tool) => tool.name).sort();
     assert.deepEqual(names, [...TOOL_NAMES].sort());
     const byName = new Map(listed.tools.map((tool) => [tool.name, tool]));
+    const schema = byName.get("search_jobs")!.inputSchema as unknown as { properties: { boards: { items: { enum: string[] } } } };
+    assert.deepEqual(schema.properties.boards.items.enum, ["zhilian", "liepin"]);
+    assert.match(byName.get("search_jobs")!.description!, /72小时/);
     assert.equal(byName.get("get_resume")?.annotations?.readOnlyHint, true);
     assert.equal(byName.get("list_applications")?.annotations?.readOnlyHint, true);
     assert.equal(byName.get("save_resume")?.annotations?.destructiveHint, true);
@@ -123,6 +130,13 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     assert.equal(byName.get("queue_apply")?.annotations?.idempotentHint, true);
     assert.match(byName.get("approve_apply")?.description ?? "", /elicitation/);
     assert.match(byName.get("save_resume")?.description ?? "", /OCR/);
+
+    const workspace = jsonResult(await session.client.callTool({ name: "get_workspace", arguments: {} }));
+    assert.equal(workspace.resume, null);
+    assert.equal(workspace.savedJobs, 0);
+    assert.equal(workspace.applications.total, 0);
+    const emptyJobs = jsonResult(await session.client.callTool({ name: "list_jobs", arguments: {} }));
+    assert.deepEqual(emptyJobs, { total: 0, jobs: [] });
 
     const prompts = await session.client.listPrompts();
     assert.equal(prompts.prompts.some((prompt) => prompt.name === "job-hunt"), true);
@@ -165,6 +179,13 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
       }),
     );
     assert.equal(scored.ok, true);
+    const candidates = await session.client.callTool({ name: "list_jobs", arguments: { board: "zhilian" } });
+    assert.equal(jsonResult(candidates).jobs[0].url, jobUrl);
+    assert.deepEqual(candidates.structuredContent, jsonResult(candidates));
+    const progress = jsonResult(await session.client.callTool({ name: "get_workspace", arguments: {} }));
+    assert.equal(progress.savedJobs, 1);
+    assert.equal(progress.profile.name, profile.name);
+
     assert.equal(scored.job.title, "高级前端工程师");
     assert.equal(scored.job.company, "星河科技");
     assert.equal(scored.job.url, jobUrl);

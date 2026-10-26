@@ -3,11 +3,11 @@ import * as z from "zod/v4";
 import { scoreJob } from "../lib/actions.js";
 import { actionContextFromTool } from "../lib/bdk-context.js";
 
-const boardSchema = z.enum(["zhilian", "liepin", "job51", "boss"]);
+const boardSchema = z.enum(["zhilian", "liepin"]);
 
 export default defineTool({
   description:
-    "Score one job against the saved resume profile. Pass JD text and/or an https URL on 智联/猎聘/51job/BOSS. Pasted text does not use the network. A URL is fetched unless this session is offline (eval, dry-run, or BOTJOB_OFFLINE). Stores the score in session state. Does not invent fields the page did not contain, and does not bypass captcha or login.",
+    "Score one job against the saved resume profile. Pass JD text and/or an https URL on 智联/猎聘. Pasted text does not use the network. A URL is fetched unless this session is offline (eval, dry-run, or BOTJOB_OFFLINE). Stores the score in session state. Does not invent fields the page did not contain, and does not bypass captcha or login.",
   // Same ToolEffect limit as search_jobs: keep "read" so dry-run still runs.
   effect: "read",
   inputSchema: z

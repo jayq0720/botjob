@@ -1,261 +1,169 @@
 # botjob
 
-求职助手 Agent：上传简历 → 分析画像 → 在智联招聘 / 猎聘 / 前程无忧(51job) / BOSS直聘搜索或打分 → 写打招呼语和求职信 → 本机半自动投递。
+**让常用 AI 帮你读简历、找岗位、比较机会，并在你确认后投递。**
 
-## 能力
+botjob 是一个通过 **MCP（Model Context Protocol）** 接入 AI 客户端的本地求职助手。支持 Cursor、Claude Desktop、Claude Code、Codex，以及其他支持本地 stdio MCP 的客户端。
 
-| 步骤 | 说明 |
+AI 负责理解你的经历、分析岗位和撰写材料；botjob 负责读取文件、获取真实岗位、保存进度，以及执行经过确认的投递操作。MCP 模式使用客户端提供的模型，无需单独配置 Cursor API key。
+
+## 能做什么
+
+| 能力 | 说明 |
 | --- | --- |
-| 1. 上传简历 | 粘贴全文、workspace 路径、PDF，或 png/jpg。文本层 PDF 直接抽取；没有文本层的 PDF 和图片走 OCR |
-| 2. 分析简历 | Agent 提炼目标岗位 / 技能 / 城市 / 年限 / 学历 / 薪资，`save_resume_profile` 落库 |
-| 3. 搜岗打分 | `search_jobs` 生成四站搜索深链，并在页面公开可读时抓取职位名、公司、薪资、城市、经验、学历、JD 正文和详情 URL，再按简历打 0–100 分。抓不到就返回原因，不编数据。用户也可以把 JD 文本或岗位 URL 交给 `score_job` |
-| 4. 话术 | Agent 按 skill 写约 150 字打招呼语和一封求职信，`save_cover_letter` 只负责保存 |
-| 5. 投递 | `queue_apply` **需用户批准** → `export_apply_pack` → 本机 `npm run apply:local` 半自动打开浏览器，逐岗确认 |
-| 6. 回写 | 本地 runner 写出 `.results.json` 后，`mark_applied` 更新会话状态 |
+| 简历读取 | 支持 PDF、扫描件、PNG、JPEG、TXT 与粘贴文本；扫描件可进行中英文 OCR |
+| 真实搜岗 | 搜索智联招聘、猎聘，保留岗位链接、JD 与来源时间 |
+| 最近三天 | 仅返回查询时刻向前 **72 小时**内可确认更新或发布的岗位；更新时间优先，无法确认时间则不返回 |
+| 公司排除 | 根据公司名称和行业证据排除保险、劳务派遣公司；证据不足的岗位单列待核实 |
+| 岗位比较 | 保存匹配依据，让 AI 对照真实经历解释优势、缺口和需要确认的条件 |
+| 登录后继续 | 网站要求登录时提示用户，在本机浏览器自行登录后继续读取 |
+| 一键投递 | 选择岗位、预览、一次确认整批，自动尝试投递；每批最多 10 条 |
+| 进度保存 | 保存画像、候选岗位、话术与投递状态，后续对话可继续处理 |
 
-打分结果存在会话里，`list_applications` / `queue_apply` 会带上分数和分项（技能命中/缺失、年限、学历、城市、薪资）。
+目前只支持**智联和猎聘**。匹配分是规则参考，不是录用概率；搜索结果仍可能混入网站推荐岗位，需要 AI 结合 JD 进一步筛选。
 
-## 为什么是「本机半自动」而不是云端代投
+## 快速开始
 
-智联 / 猎聘 / 51job / BOSS直聘没有对第三方开放的稳定公开投递 API，且登录、验证码与平台条款不允许无人值守代投。本项目采用：
+### 1. 安装与自检
 
-- **可自动**：简历解析（含 OCR）、画像、四站搜索链接、公开页面抓取、打分、话术存档、投递队列、导出 pack
-- **本机半自动**：Playwright 使用你自己的浏览器配置目录（默认 `~/.botjob/browser-profile`），每个岗位必须你按键确认
-- **禁止**：云端静默登录、绕过验证码、无人值守批量代投、代按 BOSS「发送」
-
-BOSS直聘主要是「立即沟通」。`apply:local` 可以显示打招呼语、复制到剪贴板，或在你确认后填进输入框（填入本身不按发送键）。在 BOSS 上点「立即沟通」之前，脚本会提示：点击可能会立即发送平台默认招呼语。确认后才点击。只打开四个招聘站的 https 链接。
-
-### 本机半自动投递
+建议使用 **Node.js 24.14+** 和 npm；最低支持 Node.js 22.13。需要登录搜索或一键投递时，请在有桌面的电脑上安装。
 
 ```bash
-npm install
+git clone https://github.com/qianjie0720-sys/botjob.git
+cd botjob
+npm ci
+node bin/botjob-mcp.js --check
+```
+
+使用浏览器功能前安装 Chromium：
+
+```bash
 npx playwright install chromium
-npm run apply:local -- --pack fixtures/sample-apply-pack-boss.json --dry-run
-npm run apply:local -- --pack fixtures/sample-apply-pack.json
 ```
 
-按键：`a` 已投递 · `c` 尝试点申请或「立即沟通」（仍需再确认）· `f` 填入打招呼语（不发送）· `p` 复制打招呼语 · `l` 复制求职信 · `s` 跳过 · `q` 退出。  
-结果写入同目录 `*.results.json`，再让 agent 调用 `mark_applied`。
+### 2. 接入 AI 客户端
 
-## OCR
+运行对应命令，生成配置并合并到客户端的 MCP 设置中：
 
-扫描件 PDF（没有文本层）和 png/jpg 简历使用 [tesseract.js](https://github.com/naptha/tesseract.js)，语言包是 `@tesseract.js-data/chi_sim` 与 `@tesseract.js-data/eng`（随 `npm install` 安装，运行时不下载）。识别前会把两份 `4.0.0_best_int` 语言包复制到临时目录。
+| 客户端 | 命令 |
+| --- | --- |
+| Cursor | `node bin/botjob-mcp.js --config cursor` |
+| Claude Desktop | `node bin/botjob-mcp.js --config claude-desktop` |
+| Claude Code | `node bin/botjob-mcp.js --config claude-code` |
+| Codex | `node bin/botjob-mcp.js --config codex` |
 
-限制：
+生成的配置使用当前电脑的 Node 和入口文件绝对路径；换电脑后应重新生成。重载 MCP 后，可发现 **15 个工具**。
 
-- PDF / 图片最大 8MB
-- OCR 最多 5 页
-- 识别结果少于 20 字会报错，请改贴文本
-- 不支持 webp / gif
+无参数运行 `node bin/botjob-mcp.js` 即启动 stdio 服务。客户端启动命令不要填 `npm run mcp`，npm 的输出可能干扰协议。
 
-仓库里的扫描件样例：`fixtures/sample-resume-scan.pdf`、`fixtures/sample-resume-scan.png`。
+当前提供本地 stdio 接入，尚未提供远程 HTTP MCP 地址。只接受远程 MCP URL 的网页版 AI 产品无法直接接入此配置。
 
-## 抓取限制
+### 3. 开始使用
 
-只请求这四个站的 https 页面，不带登录态，不处理验证码。常见结果：
+连接后可以直接对 AI 说：
 
-- **猎聘**城市搜索页（如 `/city-sh/zhaopin/?key=`）和职位详情页经常能直接解析
-- **智联** `sou.zhaopin.com` 有时直接返回人机验证；Node 跟随跳转后，`www.zhaopin.com/sou` 的搜索页和职位详情页可以解析。公开搜索接口 `fe-api.zhaopin.com` 仍可能返回空列表。未登录时详情页薪资会打码，这时保留列表里的薪资
-- **51job** 常见阿里云 WAF 页面
-- **BOSS** 常见跳到 `security.html`，职位列表接口返回「环境异常」
+> 这是我的简历，请分析我的优势，在上海找最近三天更新的薪酬绩效经理岗位。
 
-这些都会写进 `fetches` / `score_job` 的失败原因。页面结构变化时同样报解析失败，而不是补假数据。
+> 比较这几个岗位，说明我符合哪些条件，还有哪些经历不足。
 
-## 本地运行
+> 把我选中的这几个岗位一键投递，先给我看投递清单。
+
+> 继续上次的求职，看看哪些岗位已经投递、哪些需要我处理。
+
+通常的流程是：**读取简历 → 保存画像 → 搜索与比较 → 选择岗位 → 确认投递 → 查看结果**。
+
+## 搜索与公司筛选
+
+- 以岗位自身更新时间为优先依据，无更新字段时才采用发布时间。保留时间原文与来源类型，不将招聘者活跃时间、抓取时间或网页页脚日期作为更新证据。
+- 默认每站返回最多 5 条，`limitPerBoard` 可增至 20；每次每站最多检查 20 条候选。这是程序读取范围，不代表网站全部岗位，也不表示账号权限不足。
+- 公司筛选使用名称和行业证据，岗位福利中的“五险一金”“商业保险”不等同于保险公司。人力资源服务公司也不直接等同于劳务派遣公司。
+- `pendingEmployerReview` 单独保留公司性质或名称待核实的记录，不计入推荐结果，也不自动进入候选池。核实前不推荐。
+- 网站要求登录或验证时返回具体原因，不编造职位、不绕过校验。
+
+登录流程通过 `open_job_login` 打开运行 MCP 的电脑上的浏览器，由用户自行登录。支持 MCP elicitation 的客户端会显示完成提示；否则在聊天中等待用户确认，再用 `accessMode: "browser"` 继续搜索。电脑浏览器的登录状态不会自动同步到云端。
+
+## 一键投递
+
+`queue_apply` 准备申请后，调用 `apply_jobs` 预览。使用 `execute: true` 时，用户一次确认整批岗位，再由本机浏览器依次尝试申请，无需导出文件或在终端逐条按键。
+
+**投递使用招聘网站账号当前选用的简历，包括其中的联系方式。** 请先在网站核对账号与简历。上传给 botjob 的本地 PDF 不会自动替换网站简历；本版本也不自动发送单独保存的打招呼语、求职信或填写问卷。
+
+- 确认绑定本批岗位及内容快照，执行前再次检查岗位身份、公司限制和 72 小时时间条件。
+- 支持 elicitation 的客户端显示确认弹窗；不支持时展示清单，等待用户明确同意后再带确认参数与快照哈希执行。哈希本身不能证明用户已经同意。
+- 遇到登录、验证码、必填信息、仅支持“聊一聊”或按钮无法唯一识别时暂停。
+- 页面明确显示成功才记录成功。点击后结果不明时标记待核对，不因超时自动重试。
+
+| 状态 | 含义 |
+| --- | --- |
+| `queued` | 等待确认或本批暂停后尚未点击 |
+| `applying` | 正在准备投递 |
+| `submitted_auto` | 页面确认已投递 |
+| `submission_unknown` | 已尝试点击，结果需要人工核对 |
+| `submitted_manual` | 用户核对后确认已投递 |
+
+通过 `list_applications` 查看结果与成功证据；人工核对后可用 `mark_applied` 回写。已投递、执行中和结果未知的岗位不会重复入队。
+
+浏览器页面结构与账号权限可能变化，因此不能保证所有岗位自动提交。当前自动化验证使用真实浏览器中的隔离测试页面，尚未以用户账号验证真实投递。
+
+### 手动投递方式
+
+原有半自动流程保留：`queue_apply` → 用户确认后 `approve_apply` → `export_apply_pack`，然后在本机执行返回的命令：
 
 ```bash
-npm install
-npx @cursor/bdk login          # 模型回合需要 Cursor 凭证
-npx @cursor/bdk validate --dir .
-npx @cursor/bdk info --dir . --json
-npx @cursor/bdk call save_resume --dir . --input '{"text":"...至少40字的简历...","filename":"me.txt"}'
-npm run check                  # tsc --noEmit
-npm test                       # 单元测试，不访问招聘网站
-npx @cursor/bdk dev            # http://127.0.0.1:3000/playground
+npm run apply:local -- --pack /绝对路径/投递包.json
 ```
 
-`bdk eval` 需要 API key，CI 里没有 key 时会跳过。
+脚本逐条展示材料并等待操作；结束后通过 `mark_applied` 回写结果。未批准申请不能导出。
 
-仓库自带示例 PDF：`fixtures/sample-resume.pdf`。
+## MCP 工具
 
-Playground 对话示例：
+| 阶段 | 工具 |
+| --- | --- |
+| 恢复进度 | `get_workspace` |
+| 简历与画像 | `save_resume`、`get_resume`、`save_resume_profile` |
+| 岗位与登录 | `search_jobs`、`score_job`、`list_jobs`、`open_job_login` |
+| 求职材料 | `save_cover_letter` |
+| 投递与跟进 | `queue_apply`、`apply_jobs`、`approve_apply`、`list_applications`、`export_apply_pack`、`mark_applied` |
 
-> 下面是我的简历，请分析并在智联、猎聘、51job、BOSS 帮我找前端岗位。这是 JD：…
+工具同时返回文本 JSON 与 `structuredContent`。客户端可读取 prompt `job-hunt` 和 resource `botjob://skills/job-hunt`；独立技能说明位于 [skills/botjob/SKILL.md](skills/botjob/SKILL.md)。
 
-## 在 AI 工具里使用
+## 数据与运行环境
 
-stdio MCP 服务器把上面的工具暴露给 Claude Code、Codex CLI、Cursor、Claude Desktop，以及任何支持本地 stdio MCP 的客户端。只做本机进程，没有远程 HTTP。打招呼语和求职信仍由客户端里的模型来写，服务器只保存。
+简历和求职进度默认保存在 `~/.botjob/data/`，可通过 `BOTJOB_HOME` 指定目录。登录搜索与一键投递的浏览器会话保存在 `<BOTJOB_HOME>/search-browser/<board>`；手动投递脚本默认使用 `~/.botjob/browser-profile`，两者的登录状态独立。
 
-不克隆仓库时，用一行 npx 从 GitHub 启动（这个包是 `private`，不要发到 npm）。版本固定在 tag `v0.1.0`，与 `package.json` 的 `version` 对齐。
+浏览器会话含账号登录信息，不要提交到 Git 或分享。工具不会要求用户在聊天中提供密码、验证码或 Cookie。简历会交给所选 AI 客户端分析，其模型服务的数据处理方式取决于客户端配置；本地保存不代表简历内容完全不离开电脑。
 
-这个 tag 需要在本分支合并进 main 之后，由仓库维护者自己打。打 tag 之前，把命令里的 `#v0.1.0` 换成 `#<commit sha>`。本次改动不会创建这个 tag。
+每个用户使用独立目录，同一目录只运行一个服务实例。一般状态存储不提供跨进程事务锁；一键投递使用独立文件锁防止并发提交。进程异常退出可能留下 `one-click-apply.lock`，应先停止相关实例并核对网站投递记录，再维护锁和中断状态，避免重复投递。
+
+无交互桌面的云环境可以读取简历和抓取公开岗位，无法向用户提供本机登录窗口。登录和投递需在具备交互浏览器的环境执行。
+
+### 代理网络
+
+Node.js 24.14+ 下，公开页面请求会自动使用进程中的 `HTTP_PROXY` / `HTTPS_PROXY` 并遵守 `NO_PROXY`；`NODE_USE_ENV_PROXY=0` 可关闭自动配置。Node.js 22.21+ 或 24.5+ 可通过启动时设置 `NODE_USE_ENV_PROXY=1` 启用内置代理。
+
+MCP 客户端需要将代理变量传给服务进程；SDK 的默认环境白名单不包含这些变量。企业可信证书通过 `NODE_EXTRA_CA_CERTS` 传入，保留 TLS 校验。此配置针对公开 HTTP 请求，浏览器联网还取决于本机环境；代理不能保证绕过网站登录或风控限制。
+
+## 开发与验证
 
 ```bash
-npx -y github:qianjie0720-sys/botjob#v0.1.0
+npm run check
+npm test
+node scripts/check-pack-files.mjs
+npx bdk validate --dir .
+npm run apply:local -- --pack fixtures/sample-apply-pack-liepin.json --dry-run
 ```
 
-已经克隆仓库时，仍可 `npm install` 后启动 `node bin/botjob-mcp.js`（或在本仓库里 `npx botjob-mcp`）。不要把 `npm run mcp` 配进客户端：npm 会往 stdout 打一行脚本名，stdio 协议会坏。`npm run mcp` 只适合你自己在终端里看它是否卡住等待输入。
+当前测试覆盖简历读取、站点解析、72 小时筛选、公司排除、MCP 客户端接入、登录提示、投递确认、并发防重复及结果回写。浏览器测试在拦截页面上运行；未安装可用 Chromium 时会跳过该项，完整验证应先安装浏览器。测试不向真实岗位投递。
 
-状态在 `~/.botjob/data/`（`kv.json` 和简历文件）。设置 `BOTJOB_HOME` 可以改掉 `~/.botjob` 这一层。浏览器登录态仍是 `~/.botjob/browser-profile`，跟数据目录分开。
+| 目录 | 用途 |
+| --- | --- |
+| `bot/lib/actions/` | 简历、岗位、材料、申请、投递和工作区业务逻辑 |
+| `bot/lib/boards/` | 智联、猎聘的查询、解析、筛选与浏览器适配 |
+| `mcp/` | MCP 服务、工具注册与确认流程 |
+| `bin/` | 启动、自检和客户端配置生成 |
+| `scripts/` | 手动投递及打包检查 |
+| `tests/` | 自动化测试 |
+| `skills/` | AI 客户端使用指引 |
 
-MCP 没有 BDK 的审批卡片。`queue_apply` 只把申请标成 `queued`。模型必须先请你看岗位、链接、打招呼语和求职信；`approve_apply` 会再用 MCP elicitation 弹一次确认，弹窗里包含这些内容。服务器只批准弹窗列出的申请，并核对话术和链接的哈希，对不上就不批。
+项目保留 BDK 入口，可运行 `npm run dev`。BDK 自行驱动的模型对话和评测需要对应 Cursor 凭证；MCP 模式和本地测试无需这些凭证。
 
-客户端不支持 elicitation 时没有人工弹窗。模型要先调用一次拿到 `snapshotHash`，你明确同意后再带 `confirm: true` 和同一个哈希。只传 `confirm: true` 不会批准。风险：哈希会回到模型上下文里，不支持弹窗的客户端上，模型可以不经你点选就自己把哈希传回去，从而批准它刚读到的内容。请优先使用声明了 form elicitation 的客户端。
-
-`save_resume` 的本机路径只接受 `.pdf`、`.png`、`.jpg`、`.jpeg`、`.txt`，核对文件头（txt 必须是合法 UTF-8），读之前限制约 10MB，并拒绝隐藏文件、隐藏目录和指向它们的符号链接。
-
-没批准的岗位不能 `export_apply_pack`。`mark_applied` 只回写已经批准的申请。服务器不打开浏览器。你拿到 `localCommand` 后，自己在仓库里跑 `npm run apply:local`，逐条确认。
-
-服务器启动时会把 `bot/skills/job-hunt` 的流程和写作规范做成 prompt `job-hunt`，以及 resource `botjob://skills/job-hunt`。给 Claude Code / Codex 用的同一份说明在 `skills/botjob/SKILL.md`。
-
-配置格式来自各工具当前文档：Claude Code 的 [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)，Codex 的 [Model Context Protocol](https://learn.chatgpt.com/docs/extend/mcp)，Cursor 的 [MCP](https://cursor.com/docs/mcp)。每段先写 npx 一行，再写克隆仓库后的备选。
-
-### Claude Code
-
-```bash
-claude mcp add --transport stdio --scope user botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
-claude mcp list
-```
-
-`--` 后面整段是服务器命令，不要漏。等价 JSON：
-
-```json
-{
-  "mcpServers": {
-    "botjob": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
-    }
-  }
-}
-```
-
-已经克隆仓库时，项目级配置可以改成直接跑本机文件（Claude Code 会请你批准后才启动）：
-
-```json
-{
-  "mcpServers": {
-    "botjob": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["${CLAUDE_PROJECT_DIR:-.}/bin/botjob-mcp.js"]
-    }
-  }
-}
-```
-
-会话里用 `/mcp` 看工具列表。求职流程 skill 可链到 Claude Code 的项目技能目录：
-
-```bash
-mkdir -p .claude/skills
-ln -s ../../skills/botjob .claude/skills/botjob
-```
-
-### Codex CLI
-
-Codex 把 MCP 配在 `~/.codex/config.toml`（项目级是受信任仓库里的 `.codex/config.toml`）。CLI 和 Codex 桌面端共用这份配置。
-
-```bash
-codex mcp add botjob -- npx -y github:qianjie0720-sys/botjob#v0.1.0
-codex mcp list
-```
-
-手写时：
-
-```toml
-[mcp_servers.botjob]
-command = "npx"
-args = ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
-```
-
-已经克隆仓库时：
-
-```toml
-[mcp_servers.botjob]
-command = "node"
-args = ["/绝对路径/botjob/bin/botjob-mcp.js"]
-
-[mcp_servers.botjob.env]
-BOTJOB_HOME = "/绝对路径/.botjob"
-```
-
-技能目录是仓库里的 `.agents/skills`（或 `~/.codex/skills`）：
-
-```bash
-mkdir -p .agents/skills
-ln -s ../../skills/botjob .agents/skills/botjob
-```
-
-### Cursor
-
-项目配置是 `.cursor/mcp.json`，全局是 `~/.cursor/mcp.json`。stdio 需要 `command`，官方字段表把 `type` 标成必填。
-
-```json
-{
-  "mcpServers": {
-    "botjob": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
-    }
-  }
-}
-```
-
-已经克隆仓库、并且要用工作区里的代码时：
-
-```json
-{
-  "mcpServers": {
-    "botjob": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["${workspaceFolder}/bin/botjob-mcp.js"]
-    }
-  }
-}
-```
-
-保存后在 Cursor Settings → MCP 里刷新，确认 botjob 已连接并列出工具。
-
-### Claude Desktop 和其他 stdio 客户端
-
-Claude Desktop 的配置文件：macOS 是 `~/Library/Application Support/Claude/claude_desktop_config.json`，Windows 是 `%APPDATA%\Claude\claude_desktop_config.json`。改完要完全退出再打开。
-
-```json
-{
-  "mcpServers": {
-    "botjob": {
-      "command": "npx",
-      "args": ["-y", "github:qianjie0720-sys/botjob#v0.1.0"]
-    }
-  }
-}
-```
-
-已经克隆仓库时，把 `command` 换成 `node`，`args` 换成 `["/绝对路径/botjob/bin/botjob-mcp.js"]`。
-
-其他只支持 stdio 的客户端用同一组 `command` / `args`。服务器声明的工具说明、`readOnlyHint` / `destructiveHint`，以及 prompt `job-hunt`，会在 `tools/list` 和 `prompts/list` 里出现。
-
-## 工具一览
-
-- `save_resume` / `get_resume` / `save_resume_profile`
-- `search_jobs` / `score_job` / `save_cover_letter`
-- `queue_apply`（需审批）/ `export_apply_pack` / `mark_applied` / `list_applications`
-
-## 项目结构
-
-```
-bot/
-  instructions.md
-  tools/           # 一个工具一个文件
-  lib/boards/      # 四站搜索 URL、HTML/JSON 解析、抓取
-  lib/score.ts     # 打分
-  lib/ocr.ts       # 扫描件 OCR
-  skills/job-hunt/ # 打招呼语和求职信的写法
-scripts/local-apply.ts
-fixtures/
-evals/
-tests/
-```
+发现解析或客户端兼容问题，可在 [Issues](https://github.com/qianjie0720-sys/botjob/issues) 提供站点、客户端版本与脱敏后的错误信息。

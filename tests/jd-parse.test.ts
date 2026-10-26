@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { listingFromPosting, parsePastedJd } from "../bot/lib/jd.js";
-import { parseBossApi, parseDetailHtml, parseSearchHtml, parseZhilianApi } from "../bot/lib/boards/parse.js";
+import { parseDetailHtml, parseSearchHtml, parseZhilianApi } from "../bot/lib/boards/parse.js";
 import type { BoardId, ResumeProfile } from "../bot/lib/store.js";
 
 const profile: ResumeProfile = {
@@ -42,10 +42,10 @@ test("pasted JD keeps only fields that were written down", () => {
   if (!parsed.ok) return;
   assert.equal(parsed.job.company, "元辰云谷科技");
   assert.equal(parsed.job.jdStatus, "pasted");
-  assert.equal(parsePastedJd({ board: "boss", text: "太短" }).ok, false);
+  assert.equal(parsePastedJd({ board: "liepin", text: "太短" }).ok, false);
 });
 
-test("four boards: HTML fixtures parse and score", () => {
+test("two boards: HTML fixtures parse and score", () => {
   const cases: Array<{
     board: BoardId;
     search: string;
@@ -69,22 +69,6 @@ test("four boards: HTML fixtures parse and score", () => {
       page: "https://www.liepin.com/job/1982228597.shtml",
       title: "外滩豪宅销售",
       company: "上海六兴房地产经纪有限公司",
-    },
-    {
-      board: "job51",
-      search: "html/job51-search.html",
-      detail: "html/job51-detail.html",
-      page: "https://jobs.51job.com/shanghai/12345678.html",
-      title: "前端开发工程师",
-      company: "浦江软件",
-    },
-    {
-      board: "boss",
-      search: "html/boss-search.html",
-      detail: "html/boss-detail.html",
-      page: "https://www.zhipin.com/job_detail/abc123.html",
-      title: "资深前端工程师",
-      company: "云桥网络",
     },
   ];
 
@@ -113,7 +97,6 @@ test("four boards: HTML fixtures parse and score", () => {
   console.log(JSON.stringify(scored, null, 2));
   const byBoard = Object.fromEntries(scored.map((item) => [item.board, item]));
   assert.equal(byBoard.liepin.searchTitle, "前端工程师");
-  assert.equal(byBoard.boss.city, "上海");
   assert.ok(byBoard.zhilian.matchScore > byBoard.liepin.matchScore);
 
   const liveCards = parseSearchHtml(
@@ -141,13 +124,8 @@ test("four boards: HTML fixtures parse and score", () => {
 });
 
 test("recorded blocked payloads do not become jobs", () => {
-  const boss = parseBossApi(JSON.parse(read("blocked/boss-api-blocked.json")));
-  assert.equal(boss.ok, false);
-  if (!boss.ok) assert.equal(boss.reason, "blocked");
   const zhilian = parseZhilianApi(JSON.parse(read("blocked/zhilian-api-empty.json")));
   assert.equal(zhilian.ok, false);
   if (!zhilian.ok) assert.equal(zhilian.reason, "empty");
-  const sample = parseBossApi(JSON.parse(read("html/boss-joblist.sample.json")));
-  assert.equal(sample.ok, true);
-  if (sample.ok) assert.equal(sample.jobs[0]?.company, "云桥网络");
+
 });

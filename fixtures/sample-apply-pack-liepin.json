@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "exportedAt": "2026-10-18T00:00:00.000Z",
+  "sessionId": "sample-session",
+  "items": [
+    {
+      "id": "app-boss-demo-1",
+      "board": "liepin",
+      "title": "资深前端工程师",
+      "company": "云桥网络",
+      "city": "上海",
+      "salary": "30-50K",
+      "url": "https://www.liepin.com/job/abc123.shtml",
+      "matchScore": 88,
+      "greeting": "您好，我是张三，6年前端，带过5人小组，用React和TypeScript重构过交易前台。看到贵司上海这个前端岗位和我的技术栈比较贴近，想沟通一下是否合适。",
+      "coverLetter": "您好，\n\n我是张三，应聘贵司前端岗位。过去6年我在互联网公司做前端，最近作为负责人带5人小组，把核心交易前台用 React、TypeScript 做了重构，并处理过性能优化和工程化。\n\n岗位要求的 React / TypeScript 和上海工作地点，与我的经历一致。我可以较快接手业务迭代，也有带小组交付的经验。期望薪资 40-50K，希望确认下职级和团队情况。\n\n方便的话希望进一步沟通。谢谢。",
+      "status": "approved"
+    }
+  ]
+}

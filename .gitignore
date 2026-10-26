@@ -5,3 +5,16 @@ node_modules
 memory
 apply-packs/
 *.results.json
+
+# Local resumes, sessions, browser credentials, and test artifacts
+.env.*
+!.env.example
+.botjob/
+.cache/
+browser-profile/
+search-browser/
+/scratch/
+/attachments/
+/data/
+*.log
+one-click-apply.lock

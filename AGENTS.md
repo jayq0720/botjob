@@ -5,7 +5,7 @@ for coding agents editing the project. The served agent's prompt is
 `bot/instructions.md`.
 
 Product loop: save resume → analyze (`save_resume_profile`) →
-`search_jobs` (智联/猎聘/51job) → `queue_apply` (needs approval).
+`search_jobs` (智联/猎聘) → `queue_apply` (needs approval).
 
 ## Loop
 

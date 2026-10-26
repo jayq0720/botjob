@@ -178,11 +178,6 @@ test("query string and trailing slash are the same posting", async () => {
   const ctx = mcpActionContext(home);
   const cases: { board: QueueJobInput["board"]; plain: string; decorated: string }[] = [
     {
-      board: "boss",
-      plain: "https://www.zhipin.com/job_detail/abc123.html",
-      decorated: "https://www.zhipin.com/job_detail/abc123.html/?ka=search_list_1",
-    },
-    {
       board: "zhilian",
       plain: "https://www.zhaopin.com/jobdetail/CC001.htm",
       decorated: "https://WWW.Zhaopin.com/jobdetail/CC001.htm/?ref=list",
@@ -191,11 +186,6 @@ test("query string and trailing slash are the same posting", async () => {
       board: "liepin",
       plain: "https://www.liepin.com/job/198.htm",
       decorated: "https://www.liepin.com/job/198.htm?d_sfrom=search_prime",
-    },
-    {
-      board: "job51",
-      plain: "https://jobs.51job.com/shanghai/12345678.html",
-      decorated: "https://Jobs.51job.com/shanghai/12345678.html/?s=1",
     },
   ];
   try {
@@ -223,8 +213,8 @@ test("different job paths stay two applications", async () => {
   try {
     const both = await queueApply(ctx, {
       jobs: [
-        job("https://www.zhipin.com/job_detail/abc123.html", "boss-abc", "boss"),
-        job("https://www.zhipin.com/job_detail/def456.html?ka=x", "boss-def", "boss"),
+        job("https://www.liepin.com/job/abc123.html", "boss-abc", "liepin"),
+        job("https://www.liepin.com/job/def456.html?ka=x", "boss-def", "liepin"),
       ],
     });
     assert.equal(both.created, 2);

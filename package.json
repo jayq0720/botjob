@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Resume analyze, JD scoring, and semi-auto apply for 智联/猎聘/51job/BOSS",
+  "description": "MCP 求职助手：简历解析、智联与猎聘真实搜岗、最近72小时筛选、公司排除及确认后一键投递",
   "bin": {
     "botjob": "./bin/botjob-mcp.js",
     "botjob-mcp": "./bin/botjob-mcp.js"

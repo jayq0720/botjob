@@ -43,7 +43,7 @@ export function applicationsToPack(
   onlyApproved = true,
 ): ApplyPack {
   const items = apps
-    .filter((a) => (onlyApproved ? a.status === "approved" : true))
+    .filter((a) => jobUrlAllowed(a.job.url, a.job.board) && (onlyApproved ? a.status === "approved" : true))
     .map((a) => ({
       id: a.id,
       board: a.job.board,
@@ -90,7 +90,7 @@ export function parseApplyPack(raw: string): ApplyPack {
   return pack;
 }
 
-const BOARDS = new Set<BoardId>(["zhilian", "liepin", "job51", "boss"]);
+const BOARDS = new Set<BoardId>(["zhilian", "liepin"]);
 
 /** Reject any URL the logged-in local browser must not open or type into. */
 export function assertApplyTarget(
@@ -126,23 +126,6 @@ export const boardApplyHints: Record<
       "text=投递简历",
       "text=申请职位",
       "button:has-text('申请')",
-    ],
-  },
-  job51: {
-    label: "前程无忧",
-    selectors: [
-      "text=申请职位",
-      "text=立即申请",
-      "button:has-text('申请')",
-      "a:has-text('申请')",
-    ],
-  },
-  boss: {
-    label: "BOSS直聘",
-    selectors: [
-      "text=立即沟通",
-      "text=继续沟通",
-      "button:has-text('立即沟通')",
     ],
   },
 };

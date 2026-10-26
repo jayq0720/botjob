@@ -1,4 +1,5 @@
-export type BoardId = "zhilian" | "liepin" | "job51" | "boss";
+export const SUPPORTED_BOARDS = ["zhilian", "liepin"] as const;
+export type BoardId = (typeof SUPPORTED_BOARDS)[number];
 
 export type SearchCriteria = {
   keywords: string[];
