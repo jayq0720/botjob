@@ -8,6 +8,10 @@ export type JobPosting = JobTime & {
   title: string;
   company: string;
   companyIndustry?: string;
+  companyDescription?: string;
+  companyDescriptionSourceUrl?: string;
+  companySize?: string;
+  companyUrl?: string;
   employerReview?: "needs_review" | "no_exclusion_evidence";
   city: string;
   salary?: string;
@@ -86,6 +90,10 @@ export function listingFromPosting(
     title: posting.title,
     company: posting.company || "（未提供）",
     companyIndustry: posting.companyIndustry,
+    companyDescription: posting.companyDescription,
+    companyDescriptionSourceUrl: posting.companyDescriptionSourceUrl,
+    companySize: posting.companySize,
+    companyUrl: posting.companyUrl,
     employerReview: posting.employerReview,
     city: posting.city,
     salary: posting.salary,

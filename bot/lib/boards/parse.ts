@@ -100,6 +100,9 @@ function posting(input: JobTime & {
   title?: string;
   company?: string;
   companyIndustry?: string;
+  companyDescription?: string;
+  companySize?: string;
+  companyUrl?: string;
   city?: string;
   salary?: string;
   experience?: string;
@@ -115,6 +118,10 @@ function posting(input: JobTime & {
     title: input.title,
     company: input.company || "（未提供）",
     companyIndustry: input.companyIndustry,
+    companyDescription: input.companyDescription,
+    companyDescriptionSourceUrl: input.companyDescription ? input.url : undefined,
+    companySize: input.companySize,
+    companyUrl: input.companyUrl && jobUrlAllowed(input.companyUrl, input.board) ? input.companyUrl : undefined,
     city: input.city || "",
     salary: input.salary,
     experience: input.experience,
@@ -151,9 +158,12 @@ export function parseDetailHtml(
   const fromLd = jobPostingsFromJsonLd(html, pageUrl, board).find(
     (job) => job.description.length >= 20,
   );
-  const job = fromLd ?? (board === "zhilian"
+  const parsed = fromLd ?? (board === "zhilian"
     ? parseZhilianDetail(html, pageUrl) : parseLiepinDetail(html, pageUrl));
-  if (!job) return undefined;
+  if (!parsed) return undefined;
+  const companyDescription = parsed.companyDescription || companyIntroduction(html);
+  const job = { ...parsed, companyDescription,
+    companyDescriptionSourceUrl: companyDescription ? pageUrl : undefined };
   if (board === "liepin") {
     // Only the job's own update label, never footer SEO dates or recruiter activity.
     const header = html.match(/<section\b[^>]*class="[^"]*\bjob-apply-container\b[^"]*"[^>]*>[\s\S]*?<\/section>/)?.[0];
@@ -165,6 +175,14 @@ export function parseDetailHtml(
   const position = isRecord(detail?.detailedPosition) ? detail.detailedPosition : undefined;
   const number = pageUrl.match(/\/([^/.]+)\.htm(?:[?#]|$)/)?.[1];
   return position && number === position.number ? { ...job, ...positionTime(position, now) } : job;
+}
+
+/** Only explicit employer-introduction blocks, never the job description or recruiter biography. */
+function companyIntroduction(html: string): string | undefined {
+  const clean = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  const block = clean.match(/<(div|section|p)\b[^>]*class=["'][^"']*\b(?:company-introduction|company-intro|company-info__description|company__description)\b[^"']*["'][^>]*>([\s\S]*?)<\/\1>/i)?.[2];
+  const text = block ? plain(block).slice(0, 6000) : undefined;
+  return text || undefined;
 }
 
 function initialState(html: string): Record<string, unknown> | undefined {
@@ -369,6 +387,9 @@ function fromJobPostingLd(
     title: asString(node.title),
     company: asString(org?.name),
     companyIndustry: asString(node.industry),
+    companyDescription: asString(org?.description) ? plain(asString(org?.description)!).slice(0, 6000) : undefined,
+    companySize: typeof org?.numberOfEmployees === "number" ? String(org.numberOfEmployees) : asString(org?.numberOfEmployees),
+    companyUrl: asString(org?.sameAs) || asString(org?.url),
     city,
     salary: salaryFromLd(node.baseSalary),
     experience: asString(node.experienceRequirements),

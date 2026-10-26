@@ -64,3 +64,16 @@ for (const answer of ["accept", "decline", "unsupported"] as const) {
     } finally { await client.close(); await server.close(); }
   });
 }
+
+test('MCP browser pairing does not ask the user to confirm website login prematurely', async()=>{
+ let prompts=0;
+ const server=createBotjobServer({openLogin:async(board,url)=>({ok:true,board,status:'awaiting_browser_connection',url:url??'https://www.liepin.com/',extensionDirectory:'/local/botjob/extension',message:'请先连接扩展'})});
+ const client=new Client({name:'pairing-test',version:'1'},{capabilities:{elicitation:{form:{}}}});
+ client.setRequestHandler(ElicitRequestSchema,async()=>{prompts++;return{action:'decline'};});
+ const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
+ try{
+  const response=await client.callTool({name:'open_job_login',arguments:{board:'liepin'}});
+  assert.equal((response.structuredContent as any).status,'awaiting_browser_connection');
+  assert.equal(prompts,0);
+ }finally{await client.close();await server.close();}
+});

@@ -1,3 +1,4 @@
+import { JOB_DISPLAY_HINT, selectionAction } from "../job-display.js";
 import { browserAccess } from "../boards/browser.js";
 import { SEARCH_MAX_AGE_DAYS } from "../boards/freshness.js";
 import { SUPPORTED_BOARDS } from "../boards/types.js";
@@ -123,8 +124,9 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
       userActions: report.userActions,
       limits: report.limits,
     })),
-    applyHint:
-      "只使用 listings 里的真实岗位。抓取失败看 fetches[].message，不要编造 JD。选定后写打招呼语并 queue_apply。",
+    displayHint: JOB_DISPLAY_HINT,
+    nextAction: selectionAction(listings),
+    applyHint: "用户选定后调用 apply_jobs(jobIds) 预览，再一次确认整批投递。网站简历投递无需先写求职信或手动 queue_apply。",
   };
 }
 
@@ -265,7 +267,9 @@ async function scorePosting(
     job,
     score: job.score,
     fetchError,
-    next: "按 job-hunt skill 写 150 字内打招呼语和求职信，调用 save_cover_letter，再 queue_apply。",
+    displayHint: JOB_DISPLAY_HINT,
+    nextAction: selectionAction([job]),
+    next: "展示岗位简介和公司简介，选定后 apply_jobs(jobIds) 预览并确认；用户需要话术时再 save_cover_letter。",
   };
 }
 

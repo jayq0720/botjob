@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import * as z from "zod/v4";
 import {
-  previewDelivery, executeDelivery, type DeliveryDriver,
+  prepareDelivery, executeDelivery, type DeliveryDriver,
   applicationSnapshotHash,
   approvalBundleHash,
   approveApplications,
@@ -34,8 +34,9 @@ const skillPath = path.join(root, "bot/skills/job-hunt/SKILL.md");
 const INSTRUCTIONS = [
   "botjob 是本机求职助手，只处理智联、猎聘 的 https 链接。",
   "每次开始先调用 get_workspace 恢复进度；用 list_jobs 读取候选池，避免重复索要简历或丢失之前保存的岗位。",
-  "顺序：save_resume → save_resume_profile → search_jobs 或 score_job → 你来写打招呼语和求职信 → save_cover_letter → queue_apply → apply_jobs 预览并一次确认整批后投递；手动路径为 approve_apply → export_apply_pack。",
-  "不要编造岗位。不要改已批准话术。投递优先使用 apply_jobs：一次确认整批岗位后在本机执行；也可使用 localCommand 手动模式。遇到搜索 userActions 登录提示时调用 open_job_login，让用户自己登录，再以 accessMode=browser 继续。",
+  "顺序：save_resume → save_resume_profile → search_jobs 或 score_job → 展示岗位简介和公司简介 → 用户选择 → apply_jobs(jobIds) 预览 → 用户一次确认整批后执行。网站简历投递无需先写求职信或调用 queue_apply；需要话术时再 save_cover_letter。手动路径为 queue_apply → approve_apply → export_apply_pack。",
+  "搜索和候选池结果必须逐岗展示：岗位/公司、薪资地点、岗位简介（基于 description 概括职责和要求）、公司简介（基于 companyDescription、companyIndustry、companySize）、来源链接和更新时间。缺失正文时写尚未获取，不能从公司名猜业务。展示完提供一键投递选中岗位的下一步；MCP 客户端无按钮时让用户说出编号即可，不声称渲染了按钮。",
+  "不要编造岗位。不要改已批准话术。投递优先使用 apply_jobs：一次确认整批岗位后在本机执行；也可使用 localCommand 手动模式。遇到登录提示或 browser_connection_required 时调用 open_job_login，首次通过扩展配对复用日常浏览器；账号需要登录时由用户完成，再以 accessMode=browser 继续。",
   "匹配分是规则匹配参考，不是录用概率。分析、比较、话术由你结合真实简历和 JD 完成；服务器负责证据与状态。",
   "排除保险及劳务派遣公司；employerReview=needs_review 的公司先核实，无法确认则不推荐。不要把福利中的保险或 HR 工作职责当作公司行业。",
   "完整写作规范见 prompt / resource job-hunt。",
@@ -44,15 +45,13 @@ const INSTRUCTIONS = [
 const MCP_ADDENDUM = `
 ## MCP 本机服务器
 
-每次新对话先 get_workspace 恢复进度，用 list_jobs 查看已有候选。缺简历时才索要简历；有简历但无画像时用 get_resume 读取并分析。选岗位时说明评分依据和缺失信息，不能把匹配分说成录用概率。跨 AI 客户端继续任务时，使用同一个 BOTJOB_HOME；不同用户使用不同目录。
+每次新对话先 get_workspace 恢复进度，用 list_jobs 查看已有候选。缺简历时才索要简历；有简历但无画像时用 get_resume 读取并分析。跨 AI 客户端使用同一个 BOTJOB_HOME。
 
-BDK 的 queue_apply 自带审批卡片。这个 stdio 服务器没有审批卡片：
+默认一键投递流程：展示岗位简介和公司简介 → 用户选择编号 → apply_jobs(jobIds) 自动入队并预览 → 用户确认 → apply_jobs(ids, execute:true)。网站简历投递无需先写求职信、queue_apply、approve_apply 或导出包。没有确认时绝不执行；不支持 elicitation 时等待用户明确同意后再携带 confirm:true 与预览的 snapshotHash。
 
-1. queue_apply 只把申请标成 queued。
-2. 向用户展示岗位、链接、打招呼语和求职信，得到明确同意。
-3. 调用 approve_apply。它会用 MCP elicitation 再确认一次，弹窗里有打招呼语和求职信。只批准弹窗列出的 id，并且话术和链接的哈希必须和弹窗时一致。客户端不支持 elicitation 时，先调用一次拿到 snapshotHash，用户明确同意后再带 confirm: true 和这个哈希。只传 confirm 不会批准。没有弹窗时，模型仍可能自行回传哈希，这不是人工确认。
-4. 然后 export_apply_pack。未批准的岗位不能导出。
-5. 手动模式把 localCommand 给用户逐条操作。使用一键投递时，queue_apply 后直接 apply_jobs 预览并一次确认整批，无需先 approve_apply 或导出。
+浏览器默认通过扩展连接日常 Chrome/Edge，复用其登录态。browser_connection_required / awaiting_browser_connection 需要用户先加载扩展并配对，不能据此要求重新扫码或认定已登录。配对后再次 open_job_login，确认账号后使用 accessMode=browser。
+
+用户主动选择手动流程时：queue_apply → 展示材料 → approve_apply 确认 → export_apply_pack → 用户执行 localCommand → mark_applied 回写。
 `;
 
 const boardSchema = z.enum(["zhilian", "liepin"]);
@@ -248,7 +247,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "搜索岗位",
       description:
-        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
+        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量。userActions 表示需要用户操作；登录限制或浏览器未连接时调用 open_job_login，先完成扩展配对或登录，再 accessMode=browser 重试。结果必须展示岗位简介和公司简介，缺失则明确说明；选择后用 apply_jobs(jobIds) 预览一键投递。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
       inputSchema: searchSchema,
       annotations: {
         readOnlyHint: false,
@@ -262,11 +261,12 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
 
   server.registerTool("open_job_login", {
     title: "登录招聘网站后继续",
-    description: "搜索遇到登录限制时打开本机独立浏览器，让用户自己登录。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
+    description: "默认通过本机扩展在用户日常 Chrome/Edge 中打开招聘站，复用已有登录态。首次返回 awaiting_browser_connection 时先指导用户加载扩展并配对，完成后再次调用本工具；不要当成已登录。支持 MCP elicitation 的客户端会弹出完成提示；否则等待用户在聊天中说已登录。之后 search_jobs accessMode=browser 复用登录态。不会读取或返回密码、验证码、Cookie。云端无交互桌面时明确返回不可用。",
     inputSchema: z.object({ board: boardSchema, url: z.string().optional().describe("该站搜索链接或受限岗位链接") }),
     annotations: { ...ADD, openWorldHint: true },
   }, async (args, extra) => run(async () => {
     const opened = await (options.openLogin ?? browserAccess.open)(args.board, args.url);
+    if (opened.status === "awaiting_browser_connection") return opened;
     if (!server.server.getClientCapabilities()?.elicitation?.form) return opened;
     try {
       const reply = await server.server.elicitInput({
@@ -426,12 +426,18 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
 
   server.registerTool("apply_jobs", {
     title: "一键投递选定岗位",
-    description: "对 queue_apply 返回的1–10个申请id预览并一键投递。默认只预览；execute=true 时一次确认整批后使用本机浏览器和网站当前简历点击申请。不会上传本地PDF或发送话术。支持弹窗时必须由用户点选；不支持时先展示预览，用户明确同意后带 confirm=true 与本次 snapshotHash。登录/验证码/补填暂停，点击后结果不明不重试。不会在云端假报成功。",
-    inputSchema: z.object({ ids: z.array(z.string()).min(1).max(10), execute: z.boolean().optional(), confirm: z.boolean().optional(), snapshotHash: z.string().optional() }),
+    description: "对用户选中的1–10个已保存岗位 jobIds 自动入队并预览，也兼容 queue_apply 返回的申请 ids（二选一）。不必先写求职信或手动入队。默认只准备预览，不访问网站；execute=true 时一次确认整批后使用本机浏览器和网站当前简历点击申请。不会上传本地PDF或发送话术。支持弹窗时必须由用户点选；不支持时先展示预览，用户明确同意后带 confirm=true 与本次 snapshotHash。登录/验证码/补填暂停，点击后结果不明不重试。不会在云端假报成功。",
+    inputSchema: z.object({
+      ids: z.array(z.string()).min(1).max(10).optional().describe("已有申请 id；与 jobIds 二选一"),
+      jobIds: z.array(z.string()).min(1).max(10).optional().describe("search_jobs/list_jobs 返回的岗位 id，自动准备批次；与 ids 二选一"),
+      execute: z.boolean().optional(), confirm: z.boolean().optional(), snapshotHash: z.string().optional(),
+    }).refine(args => Boolean(args.ids) !== Boolean(args.jobIds), { message: "ids 和 jobIds 必须且只能提供一项" }),
     annotations: { ...ADD, openWorldHint: true },
   }, async (args, extra) => run(async () => {
-    const preview = await previewDelivery(ctx(), args.ids);
-    if (!args.execute || !preview.ready) return { executed: false, ...preview };
+    const preview = await prepareDelivery(ctx(), args);
+    if (!args.execute || !preview.ready) return { executed: false, ...preview,
+      nextAction: preview.ready ? { tool: "apply_jobs", label: "确认后一键投递", arguments: { ids: preview.ids, execute: true } } : undefined,
+      message: preview.ready ? "已准备整批申请，尚未投递。请展示岗位及网站简历投递方式，再由用户一次确认。" : "有岗位未通过投递检查，请先处理 issues。" };
     if (ctx().offline) return { executed: false, ...preview, message: "离线会话不执行真实投递。" };
     const message = `${preview.material}\n确认后将立即尝试投递以下 ${preview.applications.length} 个岗位：\n\n` + preview.applications.map(app => `${app.title}｜${app.company}｜${app.board}\n${app.url}`).join("\n\n");
     if (server.server.getClientCapabilities()?.elicitation?.form) {
@@ -504,7 +510,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "求职流程",
       description:
-        "求职调用顺序，以及打招呼语和求职信的写作规范。话术由你撰写，服务器只保存。MCP 里 queue_apply 之后还要 approve_apply。",
+        "求职调用顺序，以及打招呼语和求职信的写作规范。话术由你撰写，服务器只保存。MCP 一键投递直接 apply_jobs(jobIds) 预览并确认；仅手动导出路径需要 approve_apply。",
     },
     async () => ({
       messages: [

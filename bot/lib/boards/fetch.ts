@@ -21,6 +21,7 @@ export type FetchReason =
   | "empty"
   | "parse_error"
   | "render_timeout"
+  | "browser_connection_required"
   | "skipped";
 
 export type BoardFetchReport = {
@@ -118,7 +119,7 @@ export type Fetched = {
 };
 
 // Match by job URL; never borrow dates/company metadata from neighbouring recommendations.
-function mergeRendered(parsed: JobPosting[], rendered: JobPosting[] = []): JobPosting[] {
+export function mergeRendered(parsed: JobPosting[], rendered: JobPosting[] = []): JobPosting[] {
   const jobs = new Map(parsed.map(job => [canonicalJobUrl(job.url), job]));
   for (const job of rendered) {
     const key = canonicalJobUrl(job.url);
@@ -134,7 +135,7 @@ function mergeRendered(parsed: JobPosting[], rendered: JobPosting[] = []): JobPo
   return [...jobs.values()];
 }
 
-export type PageReader = (url: string) => Promise<Fetched | { error: string }>;
+export type PageReader = (url: string) => Promise<Fetched | { error: string; reason?: FetchReason }>;
 
 const FETCH_HEADERS = {
   "user-agent": UA,
@@ -188,7 +189,7 @@ async function readLimitedBody(response: Response): Promise<string> {
 }
 
 /** Fetch one allowlisted https URL. Redirects are checked one hop at a time. */
-export async function fetchText(url: string): Promise<Fetched | { error: string }> {
+export async function fetchText(url: string): Promise<Fetched | { error: string; reason?: FetchReason }> {
   if (!allowedJobUrl(url)) {
     return { error: "只抓取智联、猎聘 的 https 页面。" };
   }
@@ -259,8 +260,9 @@ export async function fetchBoard(
     return {
       board,
       ok: false,
-      reason: "network",
+      reason: fetched.reason ?? "network",
       message: `抓取搜索页失败：${fetched.error}`,
+      userActions: fetched.reason === "browser_connection_required" ? [{ board, reason: fetched.reason, url: pack.searchUrl, message: fetched.error }] : [],
       listings: [],
       detailErrors: [],
     };
@@ -365,7 +367,7 @@ export async function fetchJobUrl(
 ): Promise<{ ok: true; job: JobPosting } | { ok: false; reason: FetchReason; message: string }> {
   const fetched = await read(url);
   if ("error" in fetched) {
-    return { ok: false, reason: "network", message: `抓取岗位页失败：${fetched.error}` };
+    return { ok: false, reason: fetched.reason ?? "network", message: `抓取岗位页失败：${fetched.error}` };
   }
   const gate = classifyFetch(fetched);
   if (gate.blocked) return { ok: false, reason: gate.reason, message: gate.message };
@@ -416,6 +418,10 @@ async function enrichDetails(
       title: detail.job.title || listing.title,
       company: detail.job.company && detail.job.company !== "（未提供）" ? detail.job.company : listing.company,
       companyIndustry: detail.job.companyIndustry || listing.companyIndustry,
+      companyDescription: detail.job.companyDescription || listing.companyDescription,
+      companyDescriptionSourceUrl: detail.job.companyDescription ? detail.job.companyDescriptionSourceUrl : listing.companyDescriptionSourceUrl,
+      companySize: detail.job.companySize || listing.companySize,
+      companyUrl: detail.job.companyUrl || listing.companyUrl,
       city: detail.job.city || listing.city,
       salary: detail.job.salary || listing.salary,
       experience: detail.job.experience || listing.experience,

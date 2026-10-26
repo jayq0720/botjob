@@ -1,3 +1,4 @@
+import { JOB_DISPLAY_HINT, selectionAction } from "../job-display.js";
 import { excludedEmployer, employerReview } from "../boards/employers.js";
 import { SUPPORTED_BOARDS } from "../boards/types.js";
 import type { ActionContext } from "../state-store.js";
@@ -37,5 +38,6 @@ export async function listJobs(
     .filter((job) => SUPPORTED_BOARDS.includes(job.board) && !excludedEmployer(job) && (!input.board || job.board === input.board) && job.matchScore >= (input.minScore ?? 0))
     .map(job => ({ ...job, employerReview: employerReview(job) }))
     .sort((a, b) => b.matchScore - a.matchScore || a.id.localeCompare(b.id));
-  return { total: jobs.length, jobs: jobs.slice(0, Math.max(1, Math.min(40, input.limit ?? 20))) };
+  const visible = jobs.slice(0, Math.max(1, Math.min(40, input.limit ?? 20)));
+  return { total: jobs.length, jobs: visible, displayHint: JOB_DISPLAY_HINT, nextAction: selectionAction(visible) };
 }

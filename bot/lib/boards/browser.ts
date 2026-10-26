@@ -1,3 +1,5 @@
+import { closeExtensionBridge } from "./extension-bridge.js";
+import { extensionAccess } from "./extension-access.js";
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import type { BrowserContext } from "playwright";
@@ -57,7 +59,7 @@ export function createBrowserAccess(launch: (board: BoardId) => Promise<BrowserC
   } };
 }
 
-export const browserAccess = createBrowserAccess(async board => {
+const dedicatedAccess = createBrowserAccess(async board => {
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     throw new Error("当前云环境没有可交互的浏览器窗口。请在自己的电脑运行 botjob MCP，再调用 open_job_login；在电脑浏览器登录不会自动登录云端。");
   }
@@ -70,3 +72,12 @@ export const browserAccess = createBrowserAccess(async board => {
     throw new Error("无法打开登录浏览器。请在本机仓库执行 npm install 和 npx playwright install chromium，关闭占用同一配置目录的实例后重试。");
   }
 });
+
+/** Default to the user's paired browser; the isolated Playwright profile remains opt-in. */
+export function useExtensionBrowser() { return process.env.BOTJOB_BROWSER_MODE !== "dedicated"; }
+export const browserAccess = {
+  open: (board: BoardId, url?: string) => useExtensionBrowser() ? extensionAccess.open(board, url) : dedicatedAccess.open(board, url),
+  reader: (board: BoardId) => useExtensionBrowser() ? extensionAccess.reader(board) : dedicatedAccess.reader(board),
+  applicationPage: (board: BoardId) => dedicatedAccess.applicationPage(board),
+  async close() { await Promise.allSettled([dedicatedAccess.close(), closeExtensionBridge()]); },
+};

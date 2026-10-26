@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "botjob 本机浏览器连接",
+  "version": "0.2.0",
+  "description": "让本机 botjob 在你已登录的智联和猎聘页面读取岗位，并执行你已确认的投递。",
+  "permissions": ["scripting", "storage", "alarms", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*", "https://*.liepin.com/*", "https://liepin.com/*", "https://*.zhaopin.com/*", "https://zhaopin.com/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html"}
+}

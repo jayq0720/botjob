@@ -4,8 +4,9 @@ import path from "node:path";
 import { canonicalJobUrl, jobUrlAllowed } from "../jd.js";
 import { employerReview, excludedEmployer } from "../boards/employers.js";
 import { freshness } from "../boards/freshness.js";
-import { applicationsKey, type ApplicationRecord } from "../store.js";
+import { applicationsKey, scoredJobsKey, type JobListing, type ApplicationRecord } from "../store.js";
 import type { ActionContext } from "../state-store.js";
+import { queueApply } from "./applications.js";
 
 export type DeliveryResult = { outcome: "submitted" | "already_submitted" | "paused" | "unknown"; message: string; evidence?: string };
 export type DeliveryDriver = (app: ApplicationRecord, beforeClick: () => Promise<void>) => Promise<DeliveryResult>;
@@ -17,6 +18,19 @@ function blocked(app: ApplicationRecord): string | undefined {
   if (excludedEmployer(app.job) || employerReview(app.job) === "needs_review") return "公司属于排除类别或公司信息待核实。";
   if (freshness(app.job) !== "recent") return "岗位时间不在最近72小时内或无法确认，请重新搜索核实。";
   return undefined;
+}
+
+/** Resolve saved jobs on the server so clients never reconstruct application payloads. */
+export async function prepareDelivery(ctx: ActionContext, input: { ids?: string[]; jobIds?: string[] }) {
+  if (Boolean(input.ids) === Boolean(input.jobIds)) throw new Error("请提供 ids（申请）或 jobIds（已保存岗位）其中一项。");
+  if (input.ids) return previewDelivery(ctx, input.ids);
+  const selected = [...new Set(input.jobIds!)];
+  if (!selected.length || selected.length > 10) throw new Error("每批请选择1–10个岗位。");
+  const stored = ((await ctx.store.get(scoredJobsKey(ctx.sessionId))) as JobListing[] | undefined) ?? [];
+  const jobs = selected.map(id => stored.find(job => job.id === id));
+  if (jobs.some(job => !job)) throw new Error("部分岗位已不在候选池，请重新搜索或通过 list_jobs 选择；未准备任何新申请。");
+  const queued = await queueApply({ ...ctx, queueStatus: "queued" }, { jobs: jobs as JobListing[] });
+  return previewDelivery(ctx, queued.applications.map(app => app.id));
 }
 
 export async function previewDelivery(ctx: ActionContext, ids: string[]) {
@@ -32,7 +46,7 @@ export async function previewDelivery(ctx: ActionContext, ids: string[]) {
   if (duplicate) issues.push({ id: "batch", reason: "同一岗位不能在一批中重复投递。" });
   const snapshotHash = createHash("sha256").update(JSON.stringify({ mode: "site-resume-v1", records })).digest("hex");
   return { ready: issues.length === 0, ids: selected, snapshotHash, material: DELIVERY_MATERIAL,
-    applications: records.map(app => ({ id: app.id, board: app.job.board, title: app.job.title, company: app.job.company, url: app.job.url, status: app.status })), issues };
+    applications: records.map(app => ({ id: app.id, board: app.job.board, title: app.job.title, company: app.job.company, city: app.job.city, salary: app.job.salary, description: app.job.description, companyDescription: app.job.companyDescription, companyDescriptionSourceUrl: app.job.companyDescriptionSourceUrl, url: app.job.url, status: app.status })), issues };
 }
 
 /** Persist intent before clicking. An interrupted/uncertain click is never retried automatically. */

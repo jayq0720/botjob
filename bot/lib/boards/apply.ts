@@ -1,8 +1,9 @@
+import { extensionDelivery } from "./extension-access.js";
 import type { Page } from "playwright";
 import type { ApplicationRecord } from "../store.js";
 import type { DeliveryDriver, DeliveryResult } from "../actions/delivery.js";
 import { canonicalJobUrl, jobUrlAllowed } from "../jd.js";
-import { browserAccess } from "./browser.js";
+import { browserAccess, useExtensionBrowser } from "./browser.js";
 import { classifyFetch } from "./fetch.js";
 import { parseDetailHtml } from "./parse.js";
 import { excludedEmployer, employerReview } from "./employers.js";
@@ -57,6 +58,7 @@ export async function deliverOnPage(page: Page, app: ApplicationRecord, beforeCl
 }
 
 export const browserDelivery: DeliveryDriver = async (app, beforeClick) => {
+  if (useExtensionBrowser()) return extensionDelivery(app, beforeClick);
   const page = await browserAccess.applicationPage(app.job.board);
   if (!page) {
     try { await browserAccess.open(app.job.board, app.job.url); }

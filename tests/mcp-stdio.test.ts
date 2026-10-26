@@ -136,7 +136,10 @@ test("stdio MCP server runs the local apply flow", { timeout: 60_000 }, async ()
     assert.equal(workspace.savedJobs, 0);
     assert.equal(workspace.applications.total, 0);
     const emptyJobs = jsonResult(await session.client.callTool({ name: "list_jobs", arguments: {} }));
-    assert.deepEqual(emptyJobs, { total: 0, jobs: [] });
+    assert.equal(emptyJobs.total, 0);
+    assert.deepEqual(emptyJobs.jobs, []);
+    assert.equal(emptyJobs.nextAction, undefined);
+    assert.match(emptyJobs.displayHint, /岗位简介.*公司简介/);
 
     const prompts = await session.client.listPrompts();
     assert.equal(prompts.prompts.some((prompt) => prompt.name === "job-hunt"), true);

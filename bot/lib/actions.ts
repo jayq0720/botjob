@@ -8,4 +8,4 @@ export { applicationSnapshotHash, approvalBundleHash, approveApplications } from
 export { exportApplyPack } from "./actions/export.js";
 export { getWorkspace, listJobs } from "./actions/workspace.js";
 
-export { previewDelivery, executeDelivery, DELIVERY_MATERIAL, type DeliveryDriver } from "./actions/delivery.js";
+export { prepareDelivery, previewDelivery, executeDelivery, DELIVERY_MATERIAL, type DeliveryDriver } from "./actions/delivery.js";

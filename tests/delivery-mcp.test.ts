@@ -50,3 +50,28 @@ for (const scenario of ["accept", "decline", "changed", "unsupported"] as const)
     } finally { await client.close(); await server.close(); await rm(home, { recursive: true, force: true }); }
   });
 }
+
+test('MCP one-click accepts selected saved job ids without manual queue or cover letter', async () => {
+  const { scoredJobsKey } = await import('../bot/lib/store.js');
+  const home = await mkdtemp(path.join(tmpdir(), 'botjob-direct-apply-'));
+  const ctx = { ...mcpActionContext(home), offline: false };
+  await ctx.store.put(scoredJobsKey(ctx.sessionId), [{ id:'j1',board:'liepin',title:'薪酬经理',company:'示例科技',companyIndustry:'软件服务',city:'上海',
+    description:'负责薪酬与绩效管理', companyDescription:'开发企业软件的科技公司',url:'https://www.liepin.com/job/123.shtml',
+    sourceUpdatedAt:new Date(Date.now()-1000).toISOString(),matchScore:80,matchReason:'测试' }]);
+  let clicks=0;
+  const server=createBotjobServer({actionContext:ctx,deliveryDriver:async(_app,beforeClick)=>{await beforeClick();clicks++;return{outcome:'submitted',message:'测试',evidence:'已投递'};}});
+  const client=new Client({name:'direct-apply',version:'1'});
+  const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
+  try {
+    const invalid=await client.callTool({name:'apply_jobs',arguments:{ids:['a'],jobIds:['j1']}});
+    assert.equal(invalid.isError,true);
+    const preview=await client.callTool({name:'apply_jobs',arguments:{jobIds:['j1']}});
+    const data=preview.structuredContent as any;
+    assert.equal(data.ready,true);assert.equal(clicks,0);
+    assert.equal(data.applications[0].companyDescription,'开发企业软件的科技公司');
+    const result=await client.callTool({name:'apply_jobs',arguments:{jobIds:['j1'],execute:true,confirm:true,snapshotHash:data.snapshotHash}});
+    assert.equal((result.structuredContent as any).executed,true);assert.equal(clicks,1);
+    const again=await client.callTool({name:'apply_jobs',arguments:{jobIds:['j1'],execute:true,confirm:true,snapshotHash:data.snapshotHash}});
+    assert.equal((again.structuredContent as any).executed,false);assert.equal(clicks,1);
+  } finally {await client.close();await server.close();await rm(home,{recursive:true,force:true});}
+});

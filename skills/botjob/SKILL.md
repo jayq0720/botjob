@@ -17,8 +17,8 @@ description: >
 1. `save_resume`：简历全文、本机路径（PDF / 扫描件 / png / jpg / txt），或 base64。四选一。
 2. 阅读简历，调用 `save_resume_profile`（目标岗位、技能、城市、年限、学历、薪资、关键词）。
 3. `search_jobs` 展示各站搜索链接。只讨论 `listings` 里的真实岗位；`fetches` 的失败原因原样告诉用户。用户贴了 JD 或岗位链接时改用 `score_job`。已有详情 HTML 时把 HTML 和该站 https 链接一起交给 `score_job`，这样不会访问网络。
-4. 对准备投的岗位写打招呼语和求职信，再 `save_cover_letter`。
-5. `queue_apply`。此时状态是 `queued`，还没批准。
+4. 用户需要话术时写打招呼语和求职信，再 `save_cover_letter`；网站简历投递可跳过。
+5. 一键模式直接 `apply_jobs(jobIds)` 自动准备并预览，之后确认执行。手动模式 `queue_apply`，状态是 `queued`。
 6. 一键模式使用 `apply_jobs`（见下方），无需执行第7步的导出。手动模式把岗位、链接、打招呼语、求职信给用户看。用户明确同意后调用 `approve_apply`。工具会用 MCP elicitation 再确认，弹窗里有求职信；只批准弹窗列出的申请，话术或链接变了就不批。客户端不支持 elicitation 时，先调用一次读取 `snapshotHash`，用户已经同意后再传 `confirm: true` 和这个哈希。不要只传 `confirm`。没有弹窗时，你仍可能自行回传哈希，那不是用户点选；能用 elicitation 就用 elicitation。
 7. `export_apply_pack`。没批准的岗位不会出现在包里。把返回的 `localCommand` 交给用户，让用户在 botjob 仓库里自己运行。
 8. 用户跑完 `npm run apply:local` 后，用 `mark_applied` 回写。
@@ -93,10 +93,17 @@ npm run apply:local -- --pack <pack.json>
 
 ## 一键投递（MCP）
 
-用户选定岗位后先 `queue_apply` 取得申请 id，再调用 `apply_jobs(ids)` 预览。向用户说明公司、岗位、链接及投递材料：使用招聘网站当前账号选用的简历（含联系方式），不会自动上传本地 PDF，也不会自动发送保存的话术/求职信。请用户在网站核对账号及简历。
+用户选定岗位后直接调用 `apply_jobs(jobIds)` 自动准备并预览整批申请，无需先写求职信或手动入队；已有申请可继续使用 `apply_jobs(ids)`，两种 ID 不混传。向用户说明公司、岗位、链接及投递材料：使用招聘网站当前账号选用的简历（含联系方式），不会自动上传本地 PDF，也不会自动发送保存的话术/求职信。请用户在网站核对账号及简历。
 
 调用 `apply_jobs(ids, execute: true)`，支持 elicitation 的客户端一次确认整批岗位，随后自动依次尝试点击申请。无需先调用 approve_apply 或导出包。客户端不支持弹窗时，等待用户明确确认，再带 `execute: true, confirm: true, snapshotHash` 调用；不要自行把工具调用或哈希当作用户确认。
 
 复用 `open_job_login` 的本机浏览器登录态。首次登录、验证码、必填表单、只有“聊一聊”、按钮不唯一等情况暂停并说明，不猜答案、不绕过。只自动点击有明确证据的申请/投递按钮；不自动操作聊天发送或后续确认表单。网站明确显示成功才标为 `submitted_auto`；点击后无法确认标为 `submission_unknown`，必须人工核对，不能直接重试。用户核对实际投递记录后可用 `mark_applied` 回写结果。其余未点击申请回到 queued，完成登录/补填后重新预览确认。
 
 每批最多10条；执行前继续检查公司限制、72小时来源时间和岗位身份。已投递、执行中或结果未知的岗位不能重复入队；已确认的材料不能被覆盖。`apply_jobs` 只在运行 MCP 的有桌面电脑执行，云端无交互浏览器时明确报告不可用；开发测试不能声称已替用户投递。
+
+
+## 展示与浏览器接入
+
+搜索和候选池必须逐岗展示编号、岗位/公司、薪资地点、岗位简介（根据 description 概括职责和要求）、公司简介（根据 companyDescription、companyIndustry、companySize）、来源链接及时间。没有介绍原文则明确“尚未获取”，不得从公司名猜业务。展示后提供“一键投递选中岗位”的下一步；客户端无按钮时让用户说编号，不声称已渲染按钮。
+
+默认使用用户安装的本机浏览器扩展连接 Chrome/Edge，复用此浏览器已有登录态。`browser_connection_required` / `awaiting_browser_connection` 表示扩展未配对，不表示网站账号未登录。调用 open_job_login 打开默认浏览器的连接页，指导用户加载返回的 extensionDirectory 后点击扩展“连接当前 botjob”；完成后再次调用 open_job_login，再以 accessMode=browser 读取。不要返回配对密钥或 Cookie。只有用户配置 BOTJOB_BROWSER_MODE=dedicated 时才使用独立 Playwright 窗口，此模式仍需单独登录。

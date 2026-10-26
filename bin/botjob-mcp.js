@@ -31,10 +31,15 @@ try {
     if (!clients.includes(client)) throw new Error(`客户端必须是：${clients.join(", ")}`);
     const config = { command: process.execPath, args: [entry] };
     const dataHome = process.env.BOTJOB_HOME?.trim();
-    if (dataHome) config.env = { BOTJOB_HOME: path.resolve(dataHome) };
+    const env = {};
+    if (dataHome) env.BOTJOB_HOME = path.resolve(dataHome);
+    for (const key of ["BOTJOB_BROWSER_MODE", "BOTJOB_EXTENSION_PORT"]) {
+      if (process.env[key]?.trim()) env[key] = process.env[key].trim();
+    }
+    if (Object.keys(env).length) config.env = env;
     if (client === "codex") {
       process.stdout.write(`[mcp_servers.botjob]\ncommand = ${JSON.stringify(config.command)}\nargs = ${JSON.stringify(config.args)}\n`);
-      if (config.env) process.stdout.write(`\n[mcp_servers.botjob.env]\nBOTJOB_HOME = ${JSON.stringify(config.env.BOTJOB_HOME)}\n`);
+      if (config.env) process.stdout.write(`\n[mcp_servers.botjob.env]\n${Object.entries(config.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join("\n")}\n`);
     } else {
       if (client !== "claude-desktop") config.type = "stdio";
       process.stdout.write(`${JSON.stringify({ mcpServers: { botjob: config } }, null, 2)}\n`);
@@ -60,7 +65,7 @@ try {
       const server = createBotjobServer();
       await server.close();
       process.stdout.write(`${JSON.stringify({ ok: true, version: manifest.version, node: process.versions.node,
-        transport: "stdio", dataHome, modelCredentialsRequired: false })}\n`);
+        transport: "stdio", dataHome, browserMode: process.env.BOTJOB_BROWSER_MODE ?? "extension", modelCredentialsRequired: false })}\n`);
     } else {
       await import(new URL("../mcp/stdio.ts", import.meta.url).href);
     }

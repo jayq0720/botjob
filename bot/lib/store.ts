@@ -41,6 +41,10 @@ export type JobListing = JobTime & {
   title: string;
   company: string;
   companyIndustry?: string;
+  companyDescription?: string;
+  companyDescriptionSourceUrl?: string;
+  companySize?: string;
+  companyUrl?: string;
   employerReview?: "needs_review" | "no_exclusion_evidence";
   city: string;
   salary?: string;

@@ -18,8 +18,8 @@ User wants to upload a resume, find roles, score a JD, or apply on Chinese job b
 2. Analyze the text, then `save_resume_profile` (titles, skills, cities, years, education, salary, keywords).
 3. `search_jobs` — share each `searchPacks[].searchUrl`. Quote `fetches[].message` when a board fails. Only talk about jobs in `listings`.
 4. If the user pastes a JD or a job URL, call `score_job` instead of guessing.
-5. For each job they might apply to, write the greeting and cover letter below, then `save_cover_letter`.
-6. MCP one-click: `queue_apply` → `apply_jobs` preview → one batch confirmation → execute. Manual/BDK: approval → `export_apply_pack` → give `localCommand`.
+5. If the user requests messaging materials, write a greeting and cover letter, then `save_cover_letter`. These are optional for site-resume applications.
+6. MCP one-click: `apply_jobs(jobIds)` prepares the batch → preview → one batch confirmation → execute. Manual/BDK: approval → `export_apply_pack` → give `localCommand`.
 7. After the local runner finishes, `mark_applied`.
 
 ## Greeting and cover letter
@@ -70,10 +70,17 @@ Keys: `a` applied, `c` click 申请/立即沟通 (confirm again), `f` fill greet
 
 ## 一键投递（MCP）
 
-用户选定岗位后先 `queue_apply` 取得申请 id，再调用 `apply_jobs(ids)` 预览。向用户说明公司、岗位、链接及投递材料：使用招聘网站当前账号选用的简历（含联系方式），不会自动上传本地 PDF，也不会自动发送保存的话术/求职信。请用户在网站核对账号及简历。
+用户选定岗位后直接调用 `apply_jobs(jobIds)` 自动准备并预览整批申请，无需先写求职信或手动入队；已有申请可继续使用 `apply_jobs(ids)`，两种 ID 不混传。向用户说明公司、岗位、链接及投递材料：使用招聘网站当前账号选用的简历（含联系方式），不会自动上传本地 PDF，也不会自动发送保存的话术/求职信。请用户在网站核对账号及简历。
 
 调用 `apply_jobs(ids, execute: true)`，支持 elicitation 的客户端一次确认整批岗位，随后自动依次尝试点击申请。无需先调用 approve_apply 或导出包。客户端不支持弹窗时，等待用户明确确认，再带 `execute: true, confirm: true, snapshotHash` 调用；不要自行把工具调用或哈希当作用户确认。
 
 复用 `open_job_login` 的本机浏览器登录态。首次登录、验证码、必填表单、只有“聊一聊”、按钮不唯一等情况暂停并说明，不猜答案、不绕过。只自动点击有明确证据的申请/投递按钮；不自动操作聊天发送或后续确认表单。网站明确显示成功才标为 `submitted_auto`；点击后无法确认标为 `submission_unknown`，必须人工核对，不能直接重试。用户核对实际投递记录后可用 `mark_applied` 回写结果。其余未点击申请回到 queued，完成登录/补填后重新预览确认。
 
 每批最多10条；执行前继续检查公司限制、72小时来源时间和岗位身份。已投递、执行中或结果未知的岗位不能重复入队；已确认的材料不能被覆盖。`apply_jobs` 只在运行 MCP 的有桌面电脑执行，云端无交互浏览器时明确报告不可用；开发测试不能声称已替用户投递。
+
+
+## 展示与浏览器接入
+
+搜索和候选池必须逐岗展示编号、岗位/公司、薪资地点、岗位简介（根据 description 概括职责和要求）、公司简介（根据 companyDescription、companyIndustry、companySize）、来源链接及时间。没有介绍原文则明确“尚未获取”，不得从公司名猜业务。展示后提供“一键投递选中岗位”的下一步；客户端无按钮时让用户说编号，不声称已渲染按钮。
+
+默认使用用户安装的本机浏览器扩展连接 Chrome/Edge，复用此浏览器已有登录态。`browser_connection_required` / `awaiting_browser_connection` 表示扩展未配对，不表示网站账号未登录。调用 open_job_login 打开默认浏览器的连接页，指导用户加载返回的 extensionDirectory 后点击扩展“连接当前 botjob”；完成后再次调用 open_job_login，再以 accessMode=browser 读取。不要返回配对密钥或 Cookie。只有用户配置 BOTJOB_BROWSER_MODE=dedicated 时才使用独立 Playwright 窗口，此模式仍需单独登录。
