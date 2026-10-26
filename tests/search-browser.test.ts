@@ -9,6 +9,8 @@ import { fetchBoard, fetchJobUrl } from "../bot/lib/boards/fetch.js";
 const executablePath = existsSync(chromium.executablePath()) ? chromium.executablePath() : "/usr/bin/chromium";
 const criteria = { titles: ["薪酬经理"], keywords: [], cities: ["上海"] };
 const jd = "负责薪酬核算、绩效方案设计、人力成本预算及员工关系管理。";
+const intro = "示例科技成立于2010年，专注企业人力资源软件，服务超过三千家中大型客户，总部位于上海浦东。";
+const company = `<nav><a>公司介绍</a><a>在招职位</a></nav><h3>公司介绍</h3><p>${intro}</p><h3>工作地点</h3><p>上海浦东新区</p>`;
 const date = new Date(Date.now() - 3600_000).toISOString();
 
 // All HTTP requests are intercepted; no real accounts, recruiters or applications are used.
@@ -18,11 +20,11 @@ test("browser search waits for delayed DOM and reads nested/reordered fields on 
     for (const board of ["liepin", "zhilian"] as const) {
       const jobUrl = board === "liepin" ? "https://www.liepin.com/job/123.shtml" : "https://www.zhaopin.com/jobdetail/CC123.htm";
       const card = board === "liepin"
-        ? `<div class="extra job-card-wrapper"><div class="extra job-card-pc-container"><a href="${jobUrl}?from=search"><div class="job-title-box"><div class="ellipsis-1 extra" title="薪酬经理"><b>薪酬经理</b></div></div></a><span class="company-name"><b>示例科技</b></span><div class="company-tags-box">软件服务</div></div></div>`
-        : `<div class="extra joblist-box__item"><a href="${jobUrl}" class="extra jobinfo__name"><b>薪酬经理</b></a><a class="extra companyinfo__name"><b>示例科技</b></a><div class="companyinfo__tag">软件服务</div></div>`;
+        ? `<div class="extra job-card-wrapper"><div class="extra job-card-pc-container"><a href="${jobUrl}?from=search"><div class="job-title-box"><div class="ellipsis-1 extra" title="薪酬经理"><b>薪酬经理</b></div></div></a><span class="company-name"><b>示例科技</b></span><div class="company-tags-box"><span>软件服务</span><span>100-499人</span><span>B轮</span></div></div></div>`
+        : `<div class="extra joblist-box__item"><a href="${jobUrl}" class="extra jobinfo__name"><b>薪酬经理</b></a><a class="extra companyinfo__name"><b>示例科技</b></a><div class="companyinfo__tag"><div>100-499人</div><div>软件服务</div><div>B轮</div></div></div>`;
       const detail = board === "liepin"
-        ? `<section class="job-apply-container"><span class="extra name"><b>薪酬经理</b></span><span class="update-time">${date}</span></section><div class="company-info"><span class="name">示例科技</span></div><div data-extra="yes" data-selector="job-intro-content"><p>${jd}</p></div>`
-        : `<section class="summary-planes"><h1 class="extra summary-planes__title"><b>薪酬经理</b></h1></section><a class="company-info__name">示例科技</a><div class="describtion-card__detail-content"><div>${jd}</div></div>`;
+        ? `<section class="job-apply-container"><span class="extra name"><b>薪酬经理</b></span><span class="update-time">${date}</span></section><div class="company-info"><span class="name">示例科技</span></div><div data-extra="yes" data-selector="job-intro-content"><p>${jd}</p></div>${company}`
+        : `<section class="summary-planes"><h1 class="extra summary-planes__title"><b>薪酬经理</b></h1></section><a class="company-info__name">示例科技</a><div class="describtion-card__detail-content"><div>${jd}</div></div>${company}`;
       const context = await browser.newContext();
       await context.route("**/*", route => {
         const isDetail = /\/(?:job|jobdetail)\//.test(route.request().url());
@@ -41,6 +43,9 @@ test("browser search waits for delayed DOM and reads nested/reordered fields on 
         assert.equal(report.listings[0].company, "示例科技");
         assert.equal(report.listings[0].description, jd);
         assert.equal(report.listings[0].sourceUpdatedAt, date);
+        assert.equal(report.listings[0].companySize, "100-499人");
+        assert.equal(report.listings[0].companyStage, "B轮");
+        assert.equal(report.listings[0].companyIntro, intro);
         assert.equal(report.diagnostics?.state, "ready");
         assert.equal(report.diagnostics?.parsedCount, 1);
       } finally { await access.close(); }
@@ -83,7 +88,7 @@ test("failed details keep the failure reason instead of reporting an empty searc
   const report = await fetchBoard("liepin", criteria, { read: async url => {
     reads++;
     return { status: 200, finalUrl: url, contentType: "text/html", body: reads === 1
-      ? '<div class="job-card-pc-container"><a href="https://www.liepin.com/job/123.shtml"><div title="薪酬经理" class="ellipsis-1">薪酬经理</div></a><span class="company-name">示例科技</span><div class="company-tags-box">软件服务</div></div>'
+      ? '<div class="job-card-pc-container"><a href="https://www.liepin.com/job/123.shtml"><div title="薪酬经理" class="ellipsis-1">薪酬经理</div></a><span class="company-name">示例科技</span><div class="company-tags-box"><span>软件服务</span><span>100-499人</span><span>B轮</span></div></div>'
       : '<main id="app"></main>' };
   } });
   assert.equal(report.reason, "parse_error");

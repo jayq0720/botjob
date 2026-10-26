@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { canonicalJobUrl, jobUrlAllowed, type JobPosting } from "../jd.js";
+import { companyTags, introAfterHeading, trimIntro } from "./company.js";
 import { jobTime } from "./freshness.js";
 import type { BoardId } from "./types.js";
 
@@ -51,8 +52,9 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
           if (!published) published = [position.positionPublishTime, position.publishTime].find(value => typeof value === "string") as string ?? "";
         }
       }
+      const companyIntro = detail ? dom.text(root, ".company-intro-container .inner, .company-intro, .company-info__desc, .company__desc, .intro-content") : "";
       const description = detail ? dom.text(root, board === "liepin" ? '[data-selector="job-intro-content"], .job-intro-content' : ".describtion__detail-content, .describtion-card__detail-content") : "";
-      return { title, company, industry, labels, updated, published, description,
+      return { title, company, industry, labels, updated, published, description, companyIntro,
         url,
         salary: dom.text(root, ".job-salary, .jobinfo__salary, .salary, .summary-planes__salary, .summary-plane__salary"),
         city: dom.text(root, ".job-dq-box, .job-area") };
@@ -61,7 +63,9 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
       .some(node => dom.visible(node) && /暂无|没有|未找到|无符合/.test(node.textContent ?? ""));
     const restricted = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel'))
       .some(node => dom.visible(node) && /扫码登录|验证码|安全验证|人机验证|登录后.*(?:职位|岗位)/.test(node.textContent ?? ""));
-    return { jobs, cardCount: roots.length, empty, restricted };
+    // Visible page text lets the host find a "公司介绍" section when no known selector matches.
+    const pageText = detail ? (document.body?.innerText ?? "").slice(0, 30_000) : "";
+    return { jobs, cardCount: roots.length, empty, restricted, pageText };
   }, { board, detail });
 }
 
@@ -74,6 +78,7 @@ function postings(raw: Awaited<ReturnType<typeof capture>>, board: BoardId, now:
     const key = canonicalJobUrl(item.url);
     unique.set(key, {
       board, title: item.title, company: item.company || "（未提供）", companyIndustry: item.industry || undefined,
+      ...companyTags(item.industry), companyIntro: trimIntro(item.companyIntro) ?? (raw.pageText ? introAfterHeading(raw.pageText) : undefined),
       city: item.city || item.labels.find(label => !/经验|学历|本科|专科|硕士|博士|年|招.*人/.test(label)) || "",
       salary: item.salary && !item.salary.includes("*") ? item.salary : undefined,
       experience: item.labels.find(label => /经验|\d+.*年/.test(label)),

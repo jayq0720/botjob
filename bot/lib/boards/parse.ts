@@ -1,3 +1,4 @@
+import { companyTags, introAfterHeading, trimIntro } from "./company.js";
 import { jobTime, type JobTime } from "./freshness.js";
 import type { BoardId } from "./types.js";
 import { jobUrlAllowed, type JobPosting } from "../jd.js";
@@ -40,6 +41,10 @@ function plain(html: string): string {
   );
 }
 
+function pageText(html: string): string {
+  return plain(html.replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, " "));
+}
+
 function absUrl(href: string, base: string): string {
   try {
     const url = new URL(decodeEntities(href), base);
@@ -72,6 +77,12 @@ function textByClass(html: string, className: string): string | undefined {
   return span?.[1]?.trim() ? decodeEntities(span[1]) : undefined;
 }
 
+/** All text inside a class's element, up to its first closing div. */
+function blockText(html: string, className: string): string | undefined {
+  const block = html.match(new RegExp(`class="[^"]*\\b${className}\\b[^"]*"[^>]*>([\\s\\S]{0,600}?)<\\/div>`))?.[1];
+  return block ? plain(block).replace(/\s+/g, " ").trim() || undefined : undefined;
+}
+
 function visibleSalary(text: string | undefined): string | undefined {
   if (!text || /\*/.test(text)) return undefined;
   return text;
@@ -100,6 +111,8 @@ function posting(input: JobTime & {
   title?: string;
   company?: string;
   companyIndustry?: string;
+  companyIntro?: string;
+  companyTagText?: string;
   city?: string;
   salary?: string;
   experience?: string;
@@ -115,6 +128,8 @@ function posting(input: JobTime & {
     title: input.title,
     company: input.company || "（未提供）",
     companyIndustry: input.companyIndustry,
+    ...companyTags(input.companyTagText ?? input.companyIndustry),
+    companyIntro: trimIntro(input.companyIntro),
     city: input.city || "",
     salary: input.salary,
     experience: input.experience,
@@ -154,6 +169,7 @@ export function parseDetailHtml(
   const job = fromLd ?? (board === "zhilian"
     ? parseZhilianDetail(html, pageUrl) : parseLiepinDetail(html, pageUrl));
   if (!job) return undefined;
+  job.companyIntro ??= introAfterHeading(pageText(html));
   if (board === "liepin") {
     // Only the job's own update label, never footer SEO dates or recruiter activity.
     const header = html.match(/<section\b[^>]*class="[^"]*\bjob-apply-container\b[^"]*"[^>]*>[\s\S]*?<\/section>/)?.[0];
@@ -209,6 +225,7 @@ function parseLiepinSearch(html: string, pageUrl: string): JobPosting[] {
       title: title ? decodeEntities(title) : undefined,
       company: company ? decodeEntities(company) : undefined,
       companyIndustry: textByClass(chunk, "company-tags-box"),
+      companyTagText: blockText(chunk, "company-tags-box"),
       city: city ? decodeEntities(city) : undefined,
       salary: salary ? decodeEntities(salary) : undefined,
       ...expEdu,
@@ -220,10 +237,13 @@ function parseLiepinSearch(html: string, pageUrl: string): JobPosting[] {
   return jobs;
 }
 
-function zhilianCompanyIndustry(chunk: string): string | undefined {
+function zhilianCompanyTags(chunk: string): string[] {
   const tags = chunk.split('class="companyinfo__tag"')[1]?.split('class="companyinfo__staff"')[0] ?? "";
-  return [...tags.matchAll(/class="joblist-box__item-tag"[^>]*>([\s\S]*?)<\/div>/g)]
-    .map(match => plain(match[1]))
+  return [...tags.matchAll(/class="joblist-box__item-tag"[^>]*>([\s\S]*?)<\/div>/g)].map(match => plain(match[1]).trim());
+}
+
+function zhilianCompanyIndustry(chunk: string): string | undefined {
+  return zhilianCompanyTags(chunk)
     .filter(text => !/\d.*人|民营|国企|上市|合资|外商/.test(text))
     .join("、") || undefined;
 }
@@ -257,6 +277,7 @@ function parseZhilianSearch(html: string, pageUrl: string, now: number): JobPost
       title: name.text,
       company: company.text,
       companyIndustry: zhilianCompanyIndustry(chunk),
+      companyTagText: zhilianCompanyTags(chunk).join(" ") || undefined,
       city,
       salary: salary ? plain(salary) : undefined,
       ...expEdu,
@@ -302,6 +323,7 @@ function parseZhilianDetail(html: string, pageUrl: string): JobPosting | undefin
     salary,
     ...expEdu,
     description: description ? plain(description) : undefined,
+    companyIntro: introAfterHeading(pageText(html)),
     url: pageUrl,
   });
 }
@@ -325,6 +347,7 @@ function parseLiepinDetail(html: string, pageUrl: string): JobPosting | undefine
     salary: salary ? decodeEntities(salary) : undefined,
     ...expEdu,
     description: description ? plain(description) : undefined,
+    companyIntro: introAfterHeading(pageText(html)),
     url: pageUrl,
   });
 }
@@ -423,7 +446,7 @@ export function parseZhilianApi(payload: unknown): ApiParse {
       board: "zhilian",
       title: asString(item.jobName) || asString(item.name),
       company: asString(item.companyName),
-      companyIndustry: asString(item.industryName),
+      companyIndustry: [asString(item.industryName), isRecord(item.companySize) ? asString(item.companySize.name) : asString(item.companySize)].filter(Boolean).join(" ") || undefined,
       city,
       salary: asString(item.salary),
       experience: exp,

@@ -248,7 +248,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     {
       title: "搜索岗位",
       description:
-        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
+        "按已保存画像生成智联、猎聘 的公开搜索链接。仅返回最近72小时可确认更新或发布的真实岗位并打分；更新时间优先，无更新字段时用发布时间，时间无法确认则排除。剔除保险和劳务派遣公司；pendingEmployerReview 单独返回公司性质待核实记录，不计入 listings，不自动保存，核实前不推荐。返回来源时间与排除数量；每条岗位含 JD 正文及公司行业、规模、融资阶段和公司介绍（companyIntro，网站提供时）。userActions 表示需要用户操作；仅登录限制时调用 open_job_login，用户登录后 accessMode=browser 重试。抓不到就返回原因。不要编造职位。eval 以外默认会访问网络，attemptFetch=false 可只生成链接。",
       inputSchema: searchSchema,
       annotations: {
         readOnlyHint: false,
