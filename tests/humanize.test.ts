@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { chromium } from "playwright";
 import { searchJobs } from "../bot/lib/actions/jobs.js";
 import { saveResumeProfile } from "../bot/lib/actions.js";
@@ -104,11 +104,14 @@ test("智联 falls back to __INITIAL_STATE__.positionList when no card markup ma
 
 const executablePath = [chromium.executablePath(), "/usr/bin/chromium",
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"].find(file => existsSync(file));
+// One Chromium for this file: other test files launch their own in parallel, and every extra launch slows CI runners.
+let shared: ReturnType<typeof chromium.launch> | undefined;
+const sharedBrowser = () => shared ??= chromium.launch({ executablePath, headless: true });
+after(async () => { await (await shared)?.close(); });
 
-test("the browser reader reuses one tab per site, sends the previous page as referer, and keeps a verification page open", { skip: !executablePath, timeout: 30_000 }, async () => {
-  const browser = await chromium.launch({ executablePath, headless: true });
+test("the browser reader reuses one tab per site, sends the previous page as referer, and keeps a verification page open", { skip: !executablePath, timeout: 60_000 }, async () => {
+  const context = await (await sharedBrowser()).newContext();
   try {
-    const context = await browser.newContext();
     const referers: Array<string | undefined> = [];
     await context.route("**/*", route => {
       referers.push(route.request().headers().referer);
@@ -128,13 +131,12 @@ test("the browser reader reuses one tab per site, sends the previous page as ref
     // The verification page stays on screen for the user to complete.
     assert.equal(context.pages()[0].url(), "https://www.zhaopin.com/slider");
     await access.close();
-  } finally { await browser.close(); }
+  } finally { await context.close(); }
 });
 
-test("rendered 智联 search reads positionList when the cards use unknown classes", { skip: !executablePath, timeout: 30_000 }, async () => {
-  const browser = await chromium.launch({ executablePath, headless: true });
+test("rendered 智联 search reads positionList when the cards use unknown classes", { skip: !executablePath, timeout: 60_000 }, async () => {
+  const context = await (await sharedBrowser()).newContext();
   try {
-    const context = await browser.newContext();
     const time = new Date(Date.now() - 3600_000).toISOString();
     const state = { positionList: [{ name: "薪酬绩效经理", companyName: "示例科技", positionURL: "https://www.zhaopin.com/jobdetail/CC9.htm", workCity: "上海", salary60: "2-3万", industryName: "软件服务", companySize: "100-299人", publishTime: time }] };
     await context.route("**/*", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: `<div class="new-card-2027">薪酬绩效经理</div><script>window.__INITIAL_STATE__=${JSON.stringify(state)}</script>` }));
@@ -147,5 +149,5 @@ test("rendered 智联 search reads positionList when the cards use unknown class
     assert.equal(result.jobs[0].company, "示例科技");
     assert.equal(result.jobs[0].salary, "2-3万");
     assert.equal(result.jobs[0].companySize, "100-299人");
-  } finally { await browser.close(); }
+  } finally { await context.close(); }
 });
