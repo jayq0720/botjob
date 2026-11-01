@@ -118,6 +118,17 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
       const description = detail ? dom.text(root, sel.description) : "";
       return { title, company, industry, labels, updated, published, description, companyIntro, url, salary, city };
     });
+    if (board === "zhilian" && !detail && !jobs.length) {
+      // No known card markup: read the page's own job data, which survives CSS class renames.
+      const state = (window as unknown as { __INITIAL_STATE__?: { positionList?: Record<string, unknown>[] } }).__INITIAL_STATE__;
+      const list = Array.isArray(state?.positionList) ? state.positionList.filter(item => item && typeof item === "object") : [];
+      for (const item of list.slice(0, 100)) {
+        const industry = [dom.str(item, "financingStage"), dom.str(item, "companySize"), dom.str(item, "industryName"), dom.str(item, "propertyName") || dom.str(item, "property")].filter(Boolean).join(" · ");
+        jobs.push({ title: dom.str(item, "name").trim(), company: dom.str(item, "companyName").trim(), industry, labels: [],
+          updated: dom.str(item, "positionUpdateTime") || dom.str(item, "updateTime"), published: dom.str(item, "positionPublishTime") || dom.str(item, "publishTime"),
+          description: "", companyIntro: "", url: dom.str(item, "positionURL") || dom.str(item, "positionUrl"), salary: dom.str(item, "salary60"), city: dom.str(item, "workCity") });
+      }
+    }
     const empty = Array.from(document.querySelectorAll('.search-empty, .job-list-empty, .no-result, .no-data, .empty-result, .j_nolist'))
       .some(node => dom.visible(node) && /暂无|没有|未找到|无符合/.test(node.textContent ?? ""));
     const prompts = Array.from(document.querySelectorAll('form, [role="dialog"], .login-container, .captcha, .geetest_panel, #nc_1_wrapper'))
@@ -129,7 +140,7 @@ async function capture(page: Page, board: BoardId, detail: boolean) {
     const restricted: "verification" | "login" | "" = verification ? "verification" : login ? "login" : "";
     // Visible page text lets the host find a "公司介绍" section when no known selector matches.
     const pageText = detail ? (document.body?.innerText ?? "").slice(0, 30_000) : "";
-    return { jobs, cardCount: roots.length, empty, restricted, pageText };
+    return { jobs, cardCount: roots.length || jobs.length, empty, restricted, pageText };
   }, { board, detail, sel });
 }
 

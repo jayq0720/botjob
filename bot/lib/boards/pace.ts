@@ -3,20 +3,32 @@ import { canonicalJobUrl, type JobPosting } from "../jd.js";
 import type { StateStore } from "../state-store.js";
 import type { PageReader } from "./fetch.js";
 import type { BoardId } from "./types.js";
+import { logNormalMs, realSleep, type Random } from "./humanize.js";
 
-/** Random gap between two page loads on one site. Tests set both to 0. */
-export const readPacing = { minGapMs: 3_000, maxGapMs: 6_000 };
+/**
+ * Gap between two page loads on one site: log-normal around the median, clamped to [min, max],
+ * with an occasional longer pause as if the user stopped to read. Tests set min = max.
+ * pagesPerHour caps loads per site in any rolling hour, across searches and MCP restarts.
+ */
+export const readPacing = { minGapMs: 3_000, medianGapMs: 4_500, maxGapMs: 15_000, longPauseChance: 0.1, pagesPerHour: 40 };
+
+export function nextGapMs(random: Random = Math.random): number {
+  const { minGapMs, medianGapMs, maxGapMs, longPauseChance } = readPacing;
+  if (maxGapMs <= minGapMs) return Math.max(0, minGapMs);
+  const median = Math.min(maxGapMs, Math.max(minGapMs, medianGapMs)) * (random() < longPauseChance ? 2.2 : 1);
+  return logNormalMs({ medianMs: median, minMs: minGapMs, maxMs: maxGapMs }, random);
+}
 
 type Lane = { tail: Promise<unknown>; last: number };
 const lanes = new Map<BoardId, Lane>();
 
-/** One page at a time per site, and a 3–6 s random pause after the previous load finished. */
-export function paced(board: BoardId, read: PageReader, sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))): PageReader {
+/** One page at a time per site, and a human-like pause (usually 3–8 s) after the previous load finished. */
+export function paced(board: BoardId, read: PageReader, sleep = realSleep): PageReader {
   return url => {
     const lane = lanes.get(board) ?? { tail: Promise.resolve(), last: 0 };
     lanes.set(board, lane);
     const run = lane.tail.then(async () => {
-      const gap = readPacing.minGapMs + Math.random() * (readPacing.maxGapMs - readPacing.minGapMs);
+      const gap = nextGapMs();
       const wait = lane.last + gap - Date.now();
       if (lane.last && wait > 0) await sleep(wait);
       try { return await read(url); }
@@ -69,4 +81,49 @@ export async function recordCooldowns(store: StateStore, sessionId: string, chan
     for (const [board, entry] of Object.entries(next) as [BoardId, SiteCooldown][]) if (entry.until <= now) delete next[board];
     return { value: next, result: undefined };
   });
+}
+
+const HOUR_MS = 3600_000;
+
+export function pageLoadsKey(sessionId: string): string {
+  return `boards:${sessionId}:pageloads`;
+}
+
+/** Rolling one-hour page-load budget per site, persisted so a restarted MCP server still remembers it. */
+export function pageBudget(store: StateStore, sessionId: string) {
+  const key = pageLoadsKey(sessionId);
+  const recent = (saved: unknown, board: BoardId, now: number) =>
+    ((saved as Partial<Record<BoardId, number[]>> | undefined)?.[board] ?? []).filter(time => typeof time === "number" && now - time < HOUR_MS);
+  return {
+    /** Loads left this hour, and when the oldest counted load drops out of the window. */
+    async status(board: BoardId, now = Date.now()) {
+      const times = recent(await store.get(key), board, now);
+      return { remaining: Math.max(0, readPacing.pagesPerHour - times.length), resetsAt: times.length ? Math.min(...times) + HOUR_MS : now };
+    },
+    /** Count one load if the budget allows it; false means do not load. */
+    async take(board: BoardId, now = Date.now()): Promise<boolean> {
+      return store.update(key, current => {
+        const next = { ...(current ?? {}) as Partial<Record<BoardId, number[]>> };
+        for (const site of Object.keys(next) as BoardId[]) next[site] = recent(next, site, now);
+        const times = next[board] ?? [];
+        if (times.length >= readPacing.pagesPerHour) return { value: next, result: false };
+        next[board] = [...times, now];
+        return { value: next, result: true };
+      });
+    },
+  };
+}
+export type PageBudget = ReturnType<typeof pageBudget>;
+
+export function budgetMessage(siteName: string, resetsAt: number, now = Date.now()): string {
+  const minutes = Math.max(1, Math.ceil((resetsAt - now) / 60_000));
+  return `${siteName}在过去一小时内已读取 ${readPacing.pagesPerHour} 个页面，达到 botjob 为避免触发反爬设置的上限，约 ${minutes} 分钟后再搜索。已缓存的岗位详情不受影响。`;
+}
+
+/** A reader that refuses to load once the site's hourly budget is spent. Wrap inside paced(). */
+export function budgeted(board: BoardId, siteName: string, read: PageReader, budget: PageBudget): PageReader {
+  return async url => {
+    if (await budget.take(board)) return read(url);
+    return { error: budgetMessage(siteName, (await budget.status(board)).resetsAt) };
+  };
 }

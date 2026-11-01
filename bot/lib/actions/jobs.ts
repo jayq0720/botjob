@@ -2,7 +2,7 @@ import { browserAccess } from "../boards/browser.js";
 import { SEARCH_MAX_AGE_DAYS } from "../boards/freshness.js";
 import { SUPPORTED_BOARDS } from "../boards/types.js";
 import { fetchBoard, fetchJobUrl, fetchText, type BoardFetchReport } from "../boards/fetch.js";
-import { activeCooldowns, COOLDOWN_MS, detailCache, paced, recordCooldowns, type SiteCooldown } from "../boards/pace.js";
+import { activeCooldowns, budgeted, budgetMessage, COOLDOWN_MS, detailCache, pageBudget, paced, recordCooldowns, type SiteCooldown } from "../boards/pace.js";
 import { buildSearchPacks, criteriaFromProfile, type BoardId } from "../boards/index.js";
 import { parseDetailHtml } from "../boards/parse.js";
 import { allowedJobUrl, boardFromUrl, jobUrlAllowed, listingFromPosting, parsePastedJd } from "../jd.js";
@@ -103,6 +103,7 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
   // Boards one after another, each paced to one page at a time; detail pages come from a 24 h cache when possible.
   const cooldowns = await activeCooldowns(ctx.store, ctx.sessionId);
   const cache = detailCache(ctx.store);
+  const budget = pageBudget(ctx.store, ctx.sessionId);
   const reports: BoardFetchReport[] = [];
   const cooldownChanges: Partial<Record<BoardId, SiteCooldown | null>> = {};
   for (const board of selected) {
@@ -111,9 +112,15 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
       reports.push(cooldownReport(board, cooling));
       continue;
     }
+    // A site whose hourly page budget is spent is not touched at all, not even with retryBlocked.
+    const allowance = await budget.status(board);
+    if (allowance.remaining === 0) {
+      reports.push({ board, ok: false, reason: "rate_limited", message: budgetMessage(BOARD_NAMES[board], allowance.resetsAt), listings: [], detailErrors: [] });
+      continue;
+    }
     // 猎聘's page script blanks itself in an automated browser window, so 猎聘 always uses public pages.
     const browser = input.accessMode === "browser" && board !== "liepin";
-    const read = paced(board, browser ? browserAccess.reader(board) : fetchText);
+    const read = paced(board, budgeted(board, BOARD_NAMES[board], browser ? browserAccess.reader(board) : fetchText, budget));
     const report = await fetchBoard(board, criteria, { read, browser, limit: input.limitPerBoard, cache });
     const stop = [{ reason: report.reason, url: "" }, ...(report.userActions ?? [])].find(item => item.reason === "captcha" || item.reason === "blocked");
     cooldownChanges[board] = stop ? { until: Date.now() + COOLDOWN_MS, reason: stop.reason as SiteCooldown["reason"], url: stop.url || searchPacks.find(pack => pack.board === board)?.searchUrl || "" } : null;
@@ -234,7 +241,7 @@ export async function scoreJob(ctx: ActionContext, input: ScoreJobInput) {
     fetchError = cooldownReport(board, cooling).message;
     if (!input.text?.trim()) return { ok: false as const, reason: cooling.reason, message: `${fetchError}也可以直接把 JD 正文贴给我打分。` };
   } else if (url && !ctx.offline) {
-    const fetched = await fetchJobUrl(url, board, Date.now(), paced(board, fetchText));
+    const fetched = await fetchJobUrl(url, board, Date.now(), paced(board, budgeted(board, BOARD_NAMES[board], fetchText, pageBudget(ctx.store, ctx.sessionId))));
     if (fetched.ok) {
       return scorePosting(ctx, profile, fetched.job, input);
     }

@@ -23,6 +23,7 @@ export type FetchReason =
   | "empty"
   | "parse_error"
   | "render_timeout"
+  | "rate_limited"
   | "skipped";
 
 export type BoardFetchReport = {
