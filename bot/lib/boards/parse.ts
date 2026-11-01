@@ -294,7 +294,34 @@ function parseZhilianSearch(html: string, pageUrl: string, now: number): JobPost
       jobs.push(position ? { ...job, ...positionTime(position, now) } : job);
     }
   }
-  return jobs.length ? jobs : parseZhilianJobCards(html, positions, now);
+  if (jobs.length) return jobs;
+  const cards = parseZhilianJobCards(html, positions, now);
+  return cards.length ? cards : zhilianStateJobs(positions, now);
+}
+
+/**
+ * Jobs straight from __INITIAL_STATE__.positionList, used when no known card markup matched.
+ * The page's own data outlives CSS class renames (the approach xiaohongshu-mcp takes), so a
+ * 智联 layout change degrades to list-only results instead of a parse_error.
+ */
+export function zhilianStateJobs(positions: Record<string, unknown>[], now: number): JobPosting[] {
+  const jobs: JobPosting[] = [];
+  for (const position of positions.slice(0, 100)) {
+    const tagLine = zhilianPositionTags(position);
+    const job = posting({
+      board: "zhilian",
+      title: asString(position.name)?.trim(),
+      company: asString(position.companyName)?.trim(),
+      companyIndustry: asString(position.industryName),
+      companyTagText: tagLine || undefined,
+      city: asString(position.workCity),
+      salary: visibleSalary(asString(position.salary60) ?? asString(position.salary)),
+      url: asString(position.positionURL) ?? asString(position.positionUrl),
+      jdStatus: "list_only",
+    });
+    if (job) jobs.push({ ...job, ...positionTime(position, now) });
+  }
+  return jobs;
 }
 
 /** Company facts the positionList record states for this job, as one tag line. */

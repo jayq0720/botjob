@@ -9,12 +9,14 @@ import { SUPPORTED_BOARDS, type BoardId } from "./types.js";
 import { MAX_BODY_BYTES, type PageReader } from "./fetch.js";
 import { readRenderedJobs } from "./rendered.js";
 import { resolveLoginBrowser } from "./system-browser.js";
+import { browseLikeHuman, transientNavigationError, withRetry } from "./humanize.js";
 
 const homes = { zhilian: "https://www.zhaopin.com/", liepin: "https://www.liepin.com/", job51: "https://login.51job.com/login.php" };
 const names = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
 
 /** Cookies remain in a dedicated local browser profile; never returned to the AI. */
-export function createBrowserAccess(launch: () => Promise<BrowserContext>, render = readRenderedJobs, describe: () => LaunchInfo | undefined = () => launched) {
+export function createBrowserAccess(launch: () => Promise<BrowserContext>, render = readRenderedJobs, describe: () => LaunchInfo | undefined = () => launched,
+  humanize: (page: Page) => Promise<void> = page => browseLikeHuman(page)) {
   // One window for every board, so the user never has to guess which window to log in to.
   let session: Promise<BrowserContext> | undefined;
   const tabs = new Map<BoardId, Page>();
@@ -48,6 +50,17 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
     return { ok: true as const, board, status: "awaiting_login" as const, url, ...(info ? { browser: info.name } : {}),
       message: `${info?.note ? info.note + " " : ""}请在${where}里登录${names[board]}账号（该窗口使用独立的登录记录，平时浏览器里的登录不会带过来，但登录一次后会被记住）。各招聘站在同一个窗口的不同标签页。完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
   }
+  // One reading tab per site, reused between loads: navigation keeps a natural referer chain,
+  // and a verification page stays on screen for the user instead of vanishing with a closed tab.
+  const readTabs = new Map<BoardId, Page>();
+  async function readTab(ctx: BrowserContext, board: BoardId) {
+    const known = readTabs.get(board);
+    if (known && !known.isClosed()) return known;
+    const page = await ctx.newPage();
+    claimed.add(page);
+    readTabs.set(board, page);
+    return page;
+  }
   function reader(board: BoardId): PageReader {
     return async url => {
       if (!jobUrlAllowed(url, board)) return { error: "只读取当前招聘站的页面。" };
@@ -55,19 +68,27 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
       // The profile keeps earlier logins, so a restarted MCP server can read without a new login window.
       try { ctx = await context(); }
       catch (error) { return { error: error instanceof Error ? error.message : "无法打开浏览器。" }; }
-      const page = await ctx.newPage();
+      let page: Page;
+      try { page = await readTab(ctx, board); }
+      catch { return { error: "浏览器读取失败。请检查登录窗口是否仍然打开，再重试。" }; }
       try {
+        // Coming from the site's own previous page (search list → detail) is what a person's clicks produce.
+        const previous = page.url();
+        const referer = jobUrlAllowed(previous, board) ? previous : undefined;
         // Browser-managed cookies never enter fetch headers or model-visible results.
-        const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        // A timeout or dropped connection gets one more try after a short back-off; a served page never does.
+        const response = await withRetry(() => page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000, ...(referer ? { referer } : {}) }), { attempts: 2 });
         if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
+        await humanize(page);
         const rendered = await render(page, board);
         if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
         const body = await page.content();
         if (Buffer.byteLength(body) > MAX_BODY_BYTES) return { error: "响应体超过 8MB。" };
         return { status: response?.status() ?? 200, finalUrl: page.url(), body, contentType: "text/html", rendered };
-      } catch {
-        return { error: "浏览器读取失败。请检查登录窗口是否仍然打开，再重试。" };
-      } finally { await page.close().catch(() => undefined); }
+      } catch (error) {
+        if (page.isClosed()) readTabs.delete(board);
+        return { error: transientNavigationError(error) ? "招聘站页面加载超时或网络中断，已重试一次仍失败。请检查网络后再试。" : "浏览器读取失败。请检查登录窗口是否仍然打开，再重试。" };
+      }
     };
   }
   return { open, reader, async applicationPage(_board: BoardId) {
@@ -75,6 +96,7 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
   }, async close() {
     const pending = session;
     session = undefined;
+    readTabs.clear();
     await pending?.then(ctx => ctx.close()).catch(() => undefined);
   } };
 }
