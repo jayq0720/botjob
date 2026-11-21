@@ -118,3 +118,65 @@ test("two concurrent apply posts accept only one", async () => {
     await client.close(); await server.closeReview(); await server.close(); await rm(home, { recursive: true, force: true });
   }
 });
+
+test("review page supports stats, /api/login, and /api/mark for submission_unknown", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "botjob-review-"));
+  const ctx = { ...mcpActionContext(home), offline: false };
+  await ctx.store.put(scoredJobsKey(ctx.sessionId), [job("1"), job("2"), job("3", { sourceUpdatedAt: "2020-01-01T00:00:00Z" })]);
+  await ctx.store.put(applicationsKey(ctx.sessionId), [{
+    id: "app-unknown-1",
+    job: job("1"),
+    status: "submission_unknown",
+    createdAt: recent(),
+    updatedAt: recent(),
+    lastNote: "已点击一次，结果待核对",
+  } satisfies ApplicationRecord]);
+  let opened = "";
+  const loginBoards: string[] = [];
+  const server = createBotjobServer({
+    actionContext: ctx,
+    openUrl: async url => { opened = url; },
+    openLogin: async board => {
+      loginBoards.push(board);
+      return { ok: true, board, status: "awaiting_login", url: "https://www.zhaopin.com/", message: `已打开${board}` };
+    },
+  });
+  const client = new Client({ name: "review-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  try {
+    await client.callTool({ name: "open_job_list", arguments: {} });
+    const origin = new URL(opened).origin;
+    const snap = await (await fetch(opened + "api/jobs")).json() as {
+      canLogin: boolean;
+      stats: { total: number; ready: number; submitted: number; attention: number };
+      jobs: Array<{ id: string; appId?: string; status?: string }>;
+    };
+    assert.equal(snap.canLogin, true);
+    assert.deepEqual(snap.stats, { total: 3, ready: 1, submitted: 0, attention: 1 });
+    assert.equal(snap.jobs.find(j => j.id === "1")?.appId, "app-unknown-1");
+
+    const badLogin = await fetch(opened + "api/login", { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ board: "zhilian" }) });
+    assert.equal(badLogin.status, 403);
+    const okLogin = await fetch(opened + "api/login", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ board: "zhilian" }) });
+    assert.equal(okLogin.status, 200);
+    assert.deepEqual(loginBoards, ["zhilian"]);
+
+    const okMark = await fetch(opened + "api/mark", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ appId: "app-unknown-1", outcome: "applied", note: "核对已成功" }),
+    });
+    assert.equal(okMark.status, 200);
+    const after = await (await fetch(opened + "api/jobs")).json() as {
+      stats: { total: number; ready: number; submitted: number; attention: number };
+      jobs: Array<{ id: string; status?: string; blocked?: string }>;
+    };
+    assert.deepEqual(after.stats, { total: 3, ready: 1, submitted: 1, attention: 0 });
+    assert.equal(after.jobs.find(j => j.id === "1")?.status, "submitted_manual");
+    assert.equal(after.jobs.find(j => j.id === "1")?.blocked, "已投递");
+  } finally {
+    await client.close(); await server.closeReview(); await server.close(); await rm(home, { recursive: true, force: true });
+  }
+});
+

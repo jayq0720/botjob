@@ -10,13 +10,16 @@ import { MAX_BODY_BYTES, type PageReader } from "./fetch.js";
 import { readRenderedJobs } from "./rendered.js";
 import { resolveLoginBrowser } from "./system-browser.js";
 import { browseLikeHuman, transientNavigationError, withRetry } from "./humanize.js";
+import { hasSavedSession, keepSessionCookies, restoreSessionCookies } from "./session-cookies.js";
 
 const homes = { zhilian: "https://www.zhaopin.com/", liepin: "https://www.liepin.com/", job51: "https://login.51job.com/login.php" };
 const names = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
 
 /** Cookies remain in a dedicated local browser profile; never returned to the AI. */
 export function createBrowserAccess(launch: () => Promise<BrowserContext>, render = readRenderedJobs, describe: () => LaunchInfo | undefined = () => launched,
-  humanize: (page: Page) => Promise<void> = page => browseLikeHuman(page)) {
+  humanize: (page: Page) => Promise<void> = page => browseLikeHuman(page),
+  beforeClose: (ctx: BrowserContext) => Promise<unknown> = async () => undefined,
+  onSaveSession: (ctx: BrowserContext) => Promise<unknown> = beforeClose) {
   // One window for every board, so the user never has to guess which window to log in to.
   let session: Promise<BrowserContext> | undefined;
   const tabs = new Map<BoardId, Page>();
@@ -25,7 +28,12 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
   function context() {
     if (!session) {
       const pending = session = launch();
-      pending.then(ctx => ctx.on("close", () => { if (session === pending) session = undefined; }), () => { if (session === pending) session = undefined; });
+      pending.then(
+        ctx => ctx.on("close", () => {
+          if (session === pending) { session = undefined; tabs.clear(); readTabs.clear(); }
+        }),
+        () => { if (session === pending) session = undefined; },
+      );
     }
     return session;
   }
@@ -48,7 +56,7 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
     const info = describe();
     const where = info ? `${info.name}中的 botjob 窗口` : "botjob 打开的浏览器窗口";
     return { ok: true as const, board, status: "awaiting_login" as const, url, ...(info ? { browser: info.name } : {}),
-      message: `${info?.note ? info.note + " " : ""}请在${where}里登录${names[board]}账号（该窗口使用独立的登录记录，平时浏览器里的登录不会带过来，但登录一次后会被记住）。各招聘站在同一个窗口的不同标签页。完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
+      message: `${info?.note ? info.note + " " : ""}已在${where}打开${names[board]}。如果页面右上角已显示你的账号，说明登录仍然有效，无需重新登录；否则请在这个标签页登录（该窗口使用独立的登录记录，登录一次后会被记住，重启 botjob 也不用再登录）。各招聘站在同一个窗口的不同标签页。完成后告诉 AI 已登录，再继续搜索。不要在聊天里发送密码、验证码或 Cookie。` };
   }
   // One reading tab per site, reused between loads: navigation keeps a natural referer chain,
   // and a verification page stays on screen for the user instead of vanishing with a closed tab.
@@ -60,6 +68,10 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
     claimed.add(page);
     readTabs.set(board, page);
     return page;
+  }
+  async function saveSession() {
+    if (!session) return;
+    await session.then(ctx => onSaveSession(ctx)).catch(() => undefined);
   }
   function reader(board: BoardId): PageReader {
     return async url => {
@@ -84,6 +96,7 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
         if (!jobUrlAllowed(page.url(), board)) return { error: "页面跳转离开当前招聘站，请在登录窗口手动完成验证。" };
         const body = await page.content();
         if (Buffer.byteLength(body) > MAX_BODY_BYTES) return { error: "响应体超过 8MB。" };
+        void saveSession();
         return { status: response?.status() ?? 200, finalUrl: page.url(), body, contentType: "text/html", rendered };
       } catch (error) {
         if (page.isClosed()) readTabs.delete(board);
@@ -91,13 +104,15 @@ export function createBrowserAccess(launch: () => Promise<BrowserContext>, rende
       }
     };
   }
-  return { open, reader, async applicationPage(_board: BoardId) {
-    return session ? (await session).newPage() : undefined;
+  return { open, reader, saveSession, async applicationPage(_board: BoardId) {
+    // Launch from the saved profile when needed: the earlier login is reused instead of demanding a new one.
+    return (await context()).newPage();
   }, async close() {
     const pending = session;
     session = undefined;
     readTabs.clear();
-    await pending?.then(ctx => ctx.close()).catch(() => undefined);
+    tabs.clear();
+    await pending?.then(async ctx => { await beforeClose(ctx).catch(() => undefined); await ctx.close(); }).catch(() => undefined);
   } };
 }
 
@@ -118,18 +133,34 @@ export function profileLockedMessage(pid: number): string {
 type LaunchInfo = { name: string; note?: string };
 let launched: LaunchInfo | undefined;
 
-export const browserAccess = createBrowserAccess(async () => {
-  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+const profileDir = () => path.join(botjobHome(), "search-browser", "shared");
+/** Copy of the job sites' cookies, next to (not inside) the profile so Chromium never touches it. */
+const cookieFile = () => path.join(botjobHome(), "search-browser", "job-site-cookies.json");
+const hasDesktop = () => process.platform !== "linux" || !!process.env.DISPLAY || !!process.env.WAYLAND_DISPLAY;
+
+/**
+ * True when this computer has logged in through the botjob window before and can open it again.
+ * Search then defaults to that window, so a new chat does not ask for a login the user already did.
+ */
+export async function rememberedLogin(): Promise<boolean> {
+  if (!hasDesktop()) return false;
+  return hasSavedSession(cookieFile());
+}
+
+async function launchWindow(): Promise<BrowserContext> {
+  if (!hasDesktop()) {
     throw new Error("当前云环境没有可交互的浏览器窗口。请在自己的电脑运行 botjob MCP，再调用 open_job_login；在电脑浏览器登录不会自动登录云端。");
   }
   const { chromium } = await import("playwright");
-  const profile = path.join(botjobHome(), "search-browser", "shared");
+  const profile = profileDir();
   await mkdir(profile, { recursive: true, mode: 0o700 });
   // Another botjob window already holds this profile; a second launch would fail, and bundled Chromium cannot share it either.
   const owner = profileLockOwner(profile);
   if (owner) throw new Error(profileLockedMessage(owner));
   const { browser, note } = await resolveLoginBrowser();
-  const options = { headless: false, locale: "zh-CN", viewport: null } as const;
+  // botjob's stdio entry closes the window itself on signals, after saving the login; Playwright
+  // would otherwise kill it first. The browser is still killed if the process exits without that.
+  const options = { headless: false, locale: "zh-CN", viewport: null, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false } as const;
   if (browser) {
     try {
       const context = await chromium.launchPersistentContext(profile, { ...options, executablePath: browser.executablePath, channel: browser.channel });
@@ -148,4 +179,20 @@ export const browserAccess = createBrowserAccess(async () => {
   } catch {
     throw new Error(`无法打开登录浏览器${browser ? `（${browser.name}）` : ""}。请关闭占用 botjob 窗口的浏览器后重试；若电脑没有 Chrome/Edge，请在仓库执行 npx playwright install chromium。`);
   }
+}
+
+const keepers = new WeakMap<BrowserContext, ReturnType<typeof keepSessionCookies>>();
+
+export const browserAccess = createBrowserAccess(async () => {
+  const context = await launchWindow();
+  // Put back the login cookies Chromium dropped when the last window closed, before any page loads.
+  await restoreSessionCookies(context, cookieFile()).catch(() => 0);
+  keepers.set(context, keepSessionCookies(context, cookieFile()));
+  return context;
+}, undefined, undefined, undefined, async ctx => {
+  const keeper = keepers.get(ctx);
+  await keeper?.save();
+  keeper?.stop();
+}, async ctx => {
+  await keepers.get(ctx)?.save();
 });

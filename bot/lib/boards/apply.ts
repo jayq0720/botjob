@@ -6,12 +6,30 @@ import { browserAccess } from "./browser.js";
 import { classifyFetch } from "./fetch.js";
 import { parseDetailHtml } from "./parse.js";
 import { excludedEmployer, employerReview } from "./employers.js";
-import { freshness } from "./freshness.js";
+import { freshness, jobTime } from "./freshness.js";
 
 const APPLY = /^\s*(立即申请|申请职位|投递简历|立即投递)\s*$/;
 const DONE = /^\s*(投递成功|申请成功|已投递|已申请)\s*[！!。]?\s*$/;
+const HEADER_SELECTOR = { liepin: ".job-apply-container", zhilian: ".summary-planes, .summary-plane", job51: ".tHeader" } as const;
 const paused = (message: string): DeliveryResult => ({ outcome: "paused", message });
 const compact = (value: string) => value.replace(/\s/g, "");
+
+/** Zhaopin SPAs may keep update/publish time only in window.__INITIAL_STATE__ rather than a script tag. */
+async function runtimeTime(page: Page, board: ApplicationRecord["job"]["board"]) {
+  if (board !== "zhilian") return {};
+  try {
+    const raw = await page.evaluate(() => {
+      const state = (window as unknown as { __INITIAL_STATE__?: { jobDetail?: { detailedPosition?: Record<string, unknown> } } }).__INITIAL_STATE__;
+      const pos = state?.jobDetail?.detailedPosition;
+      if (!pos) return null;
+      const updated = [pos.positionUpdateTime, pos.updateTime].find(v => typeof v === "string" && v.trim()) as string | undefined;
+      if (updated) return { raw: updated, kind: "updated" as const };
+      const published = [pos.positionPublishTime, pos.publishTime].find(v => typeof v === "string" && v.trim()) as string | undefined;
+      return published ? { raw: published, kind: "published" as const } : null;
+    });
+    return raw ? jobTime(raw.raw, raw.kind) : {};
+  } catch { return {}; }
+}
 
 /** One irreversible click at most. Follow-up forms/chat require the user. */
 export async function deliverOnPage(page: Page, app: ApplicationRecord, beforeClick: () => Promise<void>, waitMs = 8_000): Promise<DeliveryResult> {
@@ -19,16 +37,22 @@ export async function deliverOnPage(page: Page, app: ApplicationRecord, beforeCl
   if (!jobUrlAllowed(job.url, job.board)) return paused("岗位链接不合法。");
   const response = await page.goto(job.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.bringToFront();
-  await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
+  const status = response?.status() ?? 200;
+  const earlyGate = classifyFetch({ body: await page.content(), finalUrl: page.url(), status });
+  if (earlyGate.blocked) return paused(`${earlyGate.message} 请在浏览器中完成操作后继续。`);
+  const header = page.locator(HEADER_SELECTOR[job.board]);
+  await header.first().waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+  await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => undefined);
   const html = await page.content();
-  const gate = classifyFetch({ body: html, finalUrl: page.url(), status: response?.status() ?? 200 });
+  const gate = classifyFetch({ body: html, finalUrl: page.url(), status });
   if (gate.blocked) return paused(`${gate.message} 请在浏览器中完成操作后继续。`);
   if (!jobUrlAllowed(page.url(), job.board) || canonicalJobUrl(page.url()) !== canonicalJobUrl(job.url)) return paused("页面跳转到其他岗位或站点，未点击。");
   const current = parseDetailHtml(job.board, html, page.url());
   if (!current || compact(current.title) !== compact(job.title) || compact(current.company) !== compact(job.company)) return paused("页面职位或公司与确认内容不一致，未点击。请重新搜索核实。");
+  const liveTime = freshness(current) === "unknown" ? await runtimeTime(page, job.board) : {};
+  const verifiedTime = liveTime.sourceUpdatedAt ? liveTime : (freshness(current) === "unknown" ? job : current);
   const evidence = { ...current, companyIndustry: current.companyIndustry || job.companyIndustry };
-  if (excludedEmployer(evidence) || employerReview(evidence) === "needs_review" || freshness(current) !== "recent") return paused("当前岗位的公司或最近72小时条件未通过核验，未点击。");
-  const header = page.locator({ liepin: ".job-apply-container", zhilian: ".summary-planes, .summary-plane", job51: ".tHeader" }[job.board]);
+  if (excludedEmployer(evidence) || employerReview(evidence) === "needs_review" || freshness(verifiedTime) !== "recent") return paused("当前岗位的公司或最近72小时条件未通过核验，未点击。");
   if (await header.count() !== 1) return paused("无法确认当前岗位的操作区域，未点击，请手动处理。");
   const scope = header;
   const buttons = scope.locator('button:visible, a:visible, [role="button"]:visible');
@@ -57,13 +81,12 @@ export async function deliverOnPage(page: Page, app: ApplicationRecord, beforeCl
 }
 
 export const browserDelivery: DeliveryDriver = async (app, beforeClick) => {
-  const page = await browserAccess.applicationPage(app.job.board);
-  if (!page) {
-    try { await browserAccess.open(app.job.board, app.job.url); }
-    catch (error) { return paused(error instanceof Error ? error.message : "登录浏览器不可用。"); }
-    return paused("已打开登录窗口。请登录自己的账号并核对网站简历，确认完成后重新启动未投递的申请。");
-  }
+  let page: Page;
+  // Opens the botjob window from its saved profile when needed, so an earlier login is reused.
+  try { page = await browserAccess.applicationPage(app.job.board); }
+  catch (error) { return paused(error instanceof Error ? error.message : "登录浏览器不可用。"); }
   const result = await deliverOnPage(page, app, beforeClick);
+  void browserAccess.saveSession();
   if (result.outcome === "submitted" || result.outcome === "already_submitted") await page.close();
   return result;
 };

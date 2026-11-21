@@ -89,3 +89,30 @@ for (const answer of ["accept", "decline", "unsupported"] as const) {
     } finally { await client.close(); await server.close(); }
   });
 }
+
+test("applicationPage launches saved profile and saveSession/beforeClose flush without dropping session", async () => {
+  let launches = 0;
+  let saved = 0;
+  let closed = 0;
+  const fakePage = () => ({ isClosed: () => false, close: async () => {} });
+  const access = createBrowserAccess(
+    async () => {
+      launches++;
+      return { pages: () => [], newPage: async () => fakePage(), on: () => {}, close: async () => {} } as unknown as BrowserContext;
+    },
+    undefined,
+    undefined,
+    undefined,
+    async () => { closed++; },
+    async () => { saved++; },
+  );
+  const page = await access.applicationPage("zhilian");
+  assert.ok(page);
+  assert.equal(launches, 1);
+  await access.saveSession();
+  assert.equal(saved, 1);
+  assert.equal(closed, 0);
+  await access.close();
+  assert.equal(closed, 1);
+});
+

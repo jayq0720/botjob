@@ -416,10 +416,14 @@ function parseLiepinDetail(html: string, pageUrl: string): JobPosting | undefine
   );
   const expEdu = pickExpEdu(props);
   const city = props.find((item) => item !== expEdu.experience && item !== expEdu.education && !/招\d+人|更新|学生/.test(item));
+  const company =
+    textByClass(html, "company-name") ??
+    textByClass(html, "company-title") ??
+    html.match(/class="[^"]*\bcompany-info\b[^"]*"[\s\S]{0,400}?class="[^"]*\bname\b[^"]*"[^>]*>([^<]+)</)?.[1];
   return posting({
     board: "liepin",
     title: title ? decodeEntities(title) : undefined,
-    company: "（未提供）",
+    company: company ? decodeEntities(company) : "（未提供）",
     city,
     salary: salary ? decodeEntities(salary) : undefined,
     ...expEdu,
