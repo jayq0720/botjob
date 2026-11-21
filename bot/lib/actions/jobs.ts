@@ -1,4 +1,5 @@
-import { browserAccess } from "../boards/browser.js";
+import path from "node:path";
+import { browserAccess, rememberedLogin } from "../boards/browser.js";
 import { SEARCH_MAX_AGE_DAYS } from "../boards/freshness.js";
 import { SUPPORTED_BOARDS } from "../boards/types.js";
 import { fetchBoard, fetchJobUrl, fetchText, type BoardFetchReport } from "../boards/fetch.js";
@@ -8,7 +9,7 @@ import { parseDetailHtml } from "../boards/parse.js";
 import { allowedJobUrl, boardFromUrl, jobUrlAllowed, listingFromPosting, parsePastedJd } from "../jd.js";
 import { upsertJobs } from "../job-state.js";
 import { scoreJob as scoreAgainstProfile } from "../score.js";
-import type { ActionContext } from "../state-store.js";
+import { botjobHome, type ActionContext } from "../state-store.js";
 import { resumeProfileKey, scoredJobsKey, type JobListing, type ResumeProfile } from "../store.js";
 
 const BOARD_NAMES: Record<BoardId, string> = { zhilian: "智联", liepin: "猎聘", job51: "前程无忧" };
@@ -34,6 +35,17 @@ export type SearchJobsInput = {
   /** The user handled a captcha or block in the window and asked to search that site again before the 30-minute cool-down ends. */
   retryBlocked?: boolean;
 };
+
+/**
+ * accessMode the caller left out: the botjob window when this computer logged in through it before.
+ * Without this, every new chat searched public pages, hit a login wall and asked for a login the user
+ * had already done. Only for the data home that owns the window profile.
+ */
+async function defaultAccessMode(ctx: ActionContext): Promise<"public" | "browser"> {
+  const relative = path.relative(botjobHome(), ctx.workspaceDir);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return "public";
+  return (await rememberedLogin().catch(() => false)) ? "browser" : "public";
+}
 
 export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
   const { boards, extraKeywords, cities, titles, attemptFetch } = input;
@@ -67,7 +79,7 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
 
   const selected = [...new Set(boards?.length ? boards : SUPPORTED_BOARDS)];
   if (selected.some((board) => !SUPPORTED_BOARDS.includes(board))) {
-    throw new Error("仅支持智联和猎聘。");
+    throw new Error("仅支持智联、猎聘和前程无忧。");
   }
   const criteria = criteriaFromProfile(profile);
   if (extraKeywords?.length) {
@@ -106,6 +118,7 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
   const budget = pageBudget(ctx.store, ctx.sessionId);
   const reports: BoardFetchReport[] = [];
   const cooldownChanges: Partial<Record<BoardId, SiteCooldown | null>> = {};
+  const accessMode = input.accessMode ?? await defaultAccessMode(ctx);
   for (const board of selected) {
     const cooling = cooldowns[board];
     if (cooling && !input.retryBlocked) {
@@ -119,12 +132,12 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
       continue;
     }
     // 猎聘's page script blanks itself in an automated browser window, so 猎聘 always uses public pages.
-    const browser = input.accessMode === "browser" && board !== "liepin";
+    const browser = accessMode === "browser" && board !== "liepin";
     const read = paced(board, budgeted(board, BOARD_NAMES[board], browser ? browserAccess.reader(board) : fetchText, budget));
     const report = await fetchBoard(board, criteria, { read, browser, limit: input.limitPerBoard, cache });
     const stop = [{ reason: report.reason, url: "" }, ...(report.userActions ?? [])].find(item => item.reason === "captcha" || item.reason === "blocked");
     cooldownChanges[board] = stop ? { until: Date.now() + COOLDOWN_MS, reason: stop.reason as SiteCooldown["reason"], url: stop.url || searchPacks.find(pack => pack.board === board)?.searchUrl || "" } : null;
-    reports.push(input.accessMode === "browser" && board === "liepin" ? { ...report, message: `${LIEPIN_PUBLIC_NOTE}${report.message}` } : report);
+    reports.push(accessMode === "browser" && board === "liepin" ? { ...report, message: `${LIEPIN_PUBLIC_NOTE}${report.message}` } : report);
   }
   await recordCooldowns(ctx.store, ctx.sessionId, cooldownChanges);
   const listings = reports.flatMap((report) =>
@@ -143,6 +156,7 @@ export async function searchJobs(ctx: ActionContext, input: SearchJobsInput) {
   return {
     ok: true,
     criteria,
+    accessMode,
     searchPacks,
     maxAgeDays: SEARCH_MAX_AGE_DAYS,
     listings,
@@ -183,7 +197,7 @@ export type ScoreJobInput = {
 };
 
 export async function scoreJob(ctx: ActionContext, input: ScoreJobInput) {
-  if (input.board && !SUPPORTED_BOARDS.includes(input.board)) throw new Error("仅支持智联和猎聘。");
+  if (input.board && !SUPPORTED_BOARDS.includes(input.board)) throw new Error("仅支持智联、猎聘和前程无忧。");
   const profile = (await ctx.store.get(resumeProfileKey(ctx.sessionId))) as
     | ResumeProfile
     | undefined;

@@ -185,3 +185,12 @@ test("rendered 2026 layouts: 智联 cards, 智联 detail, 51job cards and the sl
     assert.equal(blocked.diagnostics.state, "restricted");
   } finally { await browser.close(); }
 });
+
+test("parseLiepinDetail extracts company name from DOM classes when JSON-LD is absent", () => {
+  const sample = `<section class="job-apply-container"><span class="name">薪酬专家</span><span class="salary">25-35k</span><div class="job-properties"><span>上海</span><span class="update-time">今天更新</span></div></section><div class="company-info"><div class="company-name">示例科技股份</div></div><dd data-selector="job-intro-content">负责全面薪酬体系搭建与年度调薪管理，要求五年以上经验。</dd>`;
+  const parsed = parseDetailHtml("liepin", sample, "https://www.liepin.com/job/1999999999.shtml", Date.now());
+  assert.ok(parsed);
+  assert.equal(parsed.title, "薪酬专家");
+  assert.equal(parsed.company, "示例科技股份");
+});
+

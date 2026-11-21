@@ -114,7 +114,7 @@ const searchSchema = z.object({
   extraKeywords: z.array(z.string()).optional().describe("额外关键词"),
   cities: z.array(z.string()).optional().describe("覆盖画像里的城市"),
   titles: z.array(z.string()).optional().describe("没有画像时用来临时指定岗位名"),
-  accessMode: z.enum(["public", "browser"]).optional().describe("默认 public；用户通过 open_job_login 登录后使用 browser 读取同一浏览器登录态。"),
+  accessMode: z.enum(["public", "browser"]).optional().describe("省略时：本机曾在 botjob 窗口登录过则自动用 browser（复用已保存的登录），否则 public。用户通过 open_job_login 登录后使用 browser。"),
   limitPerBoard: z.number().int().min(1).max(20).optional().describe("每站返回数量，默认5，最多20。程序上限不代表站点要求登录。"),
   attemptFetch: z
     .boolean()
@@ -194,7 +194,7 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
     { instructions: INSTRUCTIONS },
   );
   const ctx = () => options.actionContext ?? mcpActionContext();
-  const review = createReviewServer(ctx, options.deliveryDriver ?? browserDelivery);
+  const review = createReviewServer(ctx, options.deliveryDriver ?? browserDelivery, board => (options.openLogin ?? browserAccess.open)(board));
 
   server.registerTool("get_workspace", {
     title: "恢复求职进度",
@@ -315,7 +315,9 @@ export function createBotjobServer(options: { openLogin?: typeof browserAccess.o
         mode: "form", message: opened.message,
         requestedSchema: { type: "object", properties: { loggedIn: { type: "boolean", title: "我已在招聘网站完成登录，继续搜索" } }, required: ["loggedIn"] },
       }, { relatedRequestId: extra.requestId });
-      return { ...opened, status: reply.action === "accept" && reply.content?.loggedIn === true ? "ready_to_retry" : "awaiting_login",
+      const ready = reply.action === "accept" && reply.content?.loggedIn === true;
+      if (ready && !options.openLogin) await browserAccess.saveSession();
+      return { ...opened, status: ready ? "ready_to_retry" : "awaiting_login",
         next: "仅用户确认已登录后，用原搜索条件和 accessMode=browser 重试；以实际读取结果确认权限，仍受限则再次提示。" };
     } catch {
       return { ...opened, message: opened.message + " 登录完成提示未能显示，请在聊天中确认已登录后继续。" };
